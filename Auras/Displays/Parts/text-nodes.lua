@@ -17,12 +17,13 @@ local textTemplate = require("Auras/Helpers/text-template")
 ---@field template string
 ---@field decimalsBelow number? Set only with limitDecimals on.
 ---@field percentDecimals integer?
+---@field hideWhenReady boolean Blank while the display is ready (see SetValues).
 ---@field curr any The values it last formatted, so it only reformats when they change.
 ---@field max any
 ---@field stacks any
 ---@field name any
 ---@field ammo any
----@field target any
+---@field info any
 ---@field shown boolean?
 ---@field content string?
 
@@ -79,6 +80,7 @@ function TextNodes.new(parent)
 end
 
 --- Places and sizes the layer around the box.
+---@private
 function TextNodes:layoutLayer()
     self.layer:SetPos(self.x - SPREAD, self.y - SPREAD)
     self.layer:SetSize(self.width + SPREAD * 2, self.height + SPREAD * 2)
@@ -86,6 +88,7 @@ end
 
 --- The layer the texts are drawn in, made the first time.
 ---@return userdata
+---@private
 function TextNodes:ensureLayer()
     if self.layer ~= nil then return self.layer end
     self.layer = ui.Layer.new(self.parent)
@@ -99,6 +102,7 @@ end
 --- The text component for a shown node's place, made if needed, and shown.
 ---@param index integer
 ---@return userdata
+---@private
 function TextNodes:component(index)
     local component = self.components[index]
     if component == nil then
@@ -144,6 +148,7 @@ function TextNodes:Apply(texts, width, height)
                 template = text.textTemplate,
                 decimalsBelow = text.limitDecimals and text.decimalsBelow or nil,
                 percentDecimals = text.percentDecimals,
+                hideWhenReady = text.hideWhenReady == true,
             }
         end
     end
@@ -181,10 +186,10 @@ end
 --- The text a node shows for these values.
 ---@param node DrawnTextNode
 ---@return string
-local function contentFor(node, curr, max, stacks, name, ammo, target, shown, noData)
+local function contentFor(node, curr, max, stacks, name, ammo, info, shown, noData)
     if not shown then return "" end
     if curr == nil or max == nil then return noData or "" end
-    return textTemplate.Format(node.template, curr, max, node.decimalsBelow, stacks, name, ammo, target,
+    return textTemplate.Format(node.template, curr, max, node.decimalsBelow, stacks, name, ammo, info,
         node.percentDecimals)
 end
 
@@ -195,17 +200,19 @@ end
 ---@param stacks number?
 ---@param name string?
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For the target's fields.
----@param shown boolean false blanks them (an Icon hiding its text while ready).
+---@param info TextInfo? For the target's fields and an ability's keybind.
+---@param allShown boolean false blanks them all (a Segmented bar's text while nothing recharges).
 ---@param noData string? What shows with no value.
-function TextNodes:SetValues(curr, max, stacks, name, ammo, target, shown, noData)
+---@param ready boolean? A ready cooldown or inactive buff (an Icon's), which blanks the nodes set to hide then.
+function TextNodes:SetValues(curr, max, stacks, name, ammo, info, allShown, noData, ready)
     for _, node in ipairs(self.nodes) do
+        local shown = allShown and not (ready and node.hideWhenReady)
         local inputsChanged = curr ~= node.curr or max ~= node.max or stacks ~= node.stacks or name ~= node.name
-            or ammo ~= node.ammo or target ~= node.target or shown ~= node.shown or node.content == nil
+            or ammo ~= node.ammo or info ~= node.info or shown ~= node.shown or node.content == nil
         if inputsChanged then
             node.curr, node.max, node.stacks, node.name, node.shown = curr, max, stacks, name, shown
-            node.ammo, node.target = ammo, target
-            local content = contentFor(node, curr, max, stacks, name, ammo, target, shown, noData)
+            node.ammo, node.info = ammo, info
+            local content = contentFor(node, curr, max, stacks, name, ammo, info, shown, noData)
             if content ~= node.content then
                 node.content = content
                 node.component.content = content

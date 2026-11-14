@@ -12,22 +12,11 @@ local TextNodes = require("Auras/Displays/Parts/text-nodes")
 local textTemplate = require("Auras/Helpers/text-template")
 local maths = require("Auras/Helpers/maths")
 local rectangles = require("Auras/Displays/Parts/rectangles")
+local barOptions = require("Auras/Displays/Options/bar")
 
 local clamp = maths.Clamp
 local newRectangle = rectangles.Filled
-
---- A bar aura's own options.
----@class BarOptions: Aura
----@field backgroundColour integer
----@field borderColour integer
----@field borderThickness integer
----@field invertFill boolean Fill as the value drops, e.g. a cooldown filling as it comes back.
----@field smoothFill boolean Move the fill every frame for sources that extrapolate between server ticks, rather than stepping each 0.6s.
----@field hideWhenEmpty boolean Hide while the value is 0 (an idle channel or buff, a ready cooldown), except while unlocked.
----@field showIcon boolean The source's icon at one end.
----@field iconSide "left"|"right"
----@field showTicks boolean Marks at each 0.6s server tick, for timed sources.
----@field tickColour integer
+local defaults = barOptions.defaults
 
 ---@class Bar: Placed
 ---@field body userdata Everything but the icon, beside the icon if shown.
@@ -41,35 +30,12 @@ local newRectangle = rectangles.Filled
 local Bar = {}
 Bar.__index = Bar
 placement.Mixin(Bar)
--- Its value texts are text nodes (see auraTexts.Ensure in Auras/Store/aura-texts).
-Bar.usesTextNodes = true
 
-Bar.defaults = {
-    width = 200,
-    height = 20,
-    backgroundColour = 0x000000B4,
-    borderColour = 0x000000B4,
-    borderThickness = 2,
-    invertFill = false,
-    smoothFill = false,
-    hideWhenEmpty = false,
-    showIcon = false,
-    iconSide = "left",
-    showTicks = false,
-    tickColour = 0x000000B4,
-}
-
-local MIN_WIDTH, MAX_WIDTH = 60, 600
-local MIN_HEIGHT, MAX_HEIGHT = 8, 60
-local MAX_BORDER = 10
+local MIN_WIDTH, MAX_WIDTH = barOptions.limits.minWidth, barOptions.limits.maxWidth
+local MIN_HEIGHT, MAX_HEIGHT = barOptions.limits.minHeight, barOptions.limits.maxHeight
+local MAX_BORDER = barOptions.limits.maxBorder
 -- The border leaves at least this much bar inside it.
 local MIN_INNER_HEIGHT = 2
--- Shared with the bar's editor controls (UI/Editor/Types/bar).
-Bar.limits = {
-    minWidth = MIN_WIDTH, maxWidth = MAX_WIDTH,
-    minHeight = MIN_HEIGHT, maxHeight = MAX_HEIGHT,
-    maxBorder = MAX_BORDER,
-}
 local SECONDS_PER_TICK = gameClock.SECONDS_PER_SERVER_TICK
 -- Tick marks closer than this (in pixels) would blur together, so none are
 -- drawn; and never more than this many.
@@ -117,9 +83,10 @@ end
 --- Sizes the root, and splits it into the icon (a square at one end) and
 --- the body, which takes the rest.
 ---@param aura BarOptions
+---@private
 function Bar:layoutIcon(aura)
-    self.width = clamp(aura.width or Bar.defaults.width, MIN_WIDTH, MAX_WIDTH)
-    self.height = clamp(aura.height or Bar.defaults.height, MIN_HEIGHT, MAX_HEIGHT)
+    self.width = clamp(aura.width or defaults.width, MIN_WIDTH, MAX_WIDTH)
+    self.height = clamp(aura.height or defaults.height, MIN_HEIGHT, MAX_HEIGHT)
     self.root:SetSize(self.width, self.height)
     self.showIcon = aura.showIcon == true
     local iconSize = self.showIcon and math.min(self.height, self.width - MIN_BODY_WIDTH) or 0
@@ -142,7 +109,7 @@ end
 function Bar:Apply(aura)
     self:layoutIcon(aura)
     local thickestBorder = math.min(MAX_BORDER, (self.height - MIN_INNER_HEIGHT) // 2)
-    self.border = clamp(aura.borderThickness or Bar.defaults.borderThickness, 0, thickestBorder)
+    self.border = clamp(aura.borderThickness or defaults.borderThickness, 0, thickestBorder)
     self:layoutFrame()
     -- The frame may have changed size, so the next redraw resizes the fill.
     self.fillWidth = nil
@@ -158,7 +125,7 @@ function Bar:Apply(aura)
     -- Ticks only mean something when max is a time in seconds.
     local source = dataSources.ForAura(aura)
     self.showTicks = aura.showTicks == true and source ~= nil and source.timed == true
-    self.tickColour = aura.tickColour or Bar.defaults.tickColour
+    self.tickColour = aura.tickColour or defaults.tickColour
     -- Laid out again for the new size and settings on the next redraw
     -- (false never matches a max, even no data's nil).
     self.ticksMax = false
@@ -170,6 +137,7 @@ end
 
 --- Places the border and the background and fill inside it, making the
 --- border when it first has a thickness.
+---@private
 function Bar:layoutFrame()
     local width, height, border = self.bodyWidth, self.height, self.border
     if self.frame == nil and border > 0 then
@@ -188,17 +156,18 @@ end
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For the target's fields.
-function Bar:SetDetails(name, spriteID, objectID, ammo, target)
+---@param info TextInfo? For the target's fields and an ability's keybind.
+function Bar:SetDetails(name, spriteID, objectID, ammo, info)
     if self.icon ~= nil then self.icon:Set(spriteID, objectID) end
-    if name ~= self.name or ammo ~= self.ammo or target ~= self.target then
-        self.name, self.ammo, self.target = name, ammo, target
+    if name ~= self.name or ammo ~= self.ammo or info ~= self.info then
+        self.name, self.ammo, self.info = name, ammo, info
         self:redraw()
     end
 end
 
 --- Makes the layer the ticks are drawn in. The texts are outside the bar,
 --- over it, so ticks made later stay under them.
+---@private
 function Bar:makeTickLayer()
     self.tickLayer = ui.Layer.new(self.body)
     self.tickLayer.clickthrough = true
@@ -207,6 +176,7 @@ end
 
 --- Lays one mark per server tick across the bar, when there's room for them.
 ---@param max number? The bar's max, in seconds.
+---@private
 function Bar:layoutTicks(max)
     local innerWidth = self.bodyWidth - self.border * 2
     local count = 0
@@ -245,6 +215,7 @@ function Bar:SetValue(curr, max, fillCurr, stacks)
 end
 
 --- Draws the current values: hiding, fill, ticks and texts.
+---@private
 function Bar:redraw()
     local curr, max = self.curr, self.max
     local isEmpty = curr == nil or curr <= 0
@@ -272,7 +243,7 @@ function Bar:redraw()
     -- A smoothed fill redraws every frame, but each text only reformats
     -- when its values change (see TextNodes:SetValues).
     local textShown = true
-    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.target, textShown, textTemplate.NO_DATA)
+    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.info, textShown, textTemplate.NO_DATA)
 end
 
 --- Destroys the bar and everything in it.

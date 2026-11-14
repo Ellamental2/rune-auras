@@ -55,13 +55,15 @@ local logicTicksPerServerTick = nil
 -- The last SAMPLE_COUNT gaps, written round-robin.
 local samples = {}
 local sampleIndex = 0
+-- The samples copied and sorted for the median, kept so each tick reuses it.
+local sorted = {}
 
 --- Records a measured server tick length and updates the median.
 ---@param measured integer Logic ticks between two server ticks.
 local function addSample(measured)
     sampleIndex = sampleIndex % SAMPLE_COUNT + 1
     samples[sampleIndex] = measured
-    local sorted = { table.unpack(samples) }
+    for index = 1, #samples do sorted[index] = samples[index] end
     table.sort(sorted)
     logicTicksPerServerTick = sorted[(#sorted + 1) // 2]
 end
@@ -105,6 +107,13 @@ end
 ---@return integer
 function gameClock.ServerTicks()
     return serverTicks
+end
+
+--- The Logic tick the latest server tick came on, for something the game
+--- updates a set number of Logic ticks after it.
+---@return integer? logicTick nil until a server tick has come since entering the game.
+function gameClock.ServerTickLogicTick()
+    return logicTickAtServerTick
 end
 
 --- Forgets the last tick, e.g. on leaving the game, so the gap until the

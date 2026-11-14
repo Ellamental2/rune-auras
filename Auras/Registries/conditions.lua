@@ -10,7 +10,7 @@ local conditions = {}
 ---@field source string? Data source id; nil with a sourceType means none picked yet, and the check fails.
 ---@field kind string A CHECKS id: what's tested.
 ---@field op string? An OPERATORS id, for kinds that compare a number.
----@field value number|boolean The number compared against; for "active", true (active) or false (not active).
+---@field value number|boolean|string The number compared against; for "active", true (active), false (not active), or for an ability USABLE or NOT_USABLE.
 ---@field join string? Old saves only: "and"/"or" with the check before (see convertConditions in Auras/Store/aura-record).
 
 --- A display option a passing condition sets.
@@ -42,10 +42,14 @@ local conditions = {}
 ---@field perText boolean? On a display with text nodes, a change names the node it changes.
 ---@field min number? For "number".
 ---@field max number? For "number".
----@field limit string? For "number": the display module's `limits` entry holding the max.
+---@field limit string? For "number": the display type's `limits` entry holding the max (see Auras/Displays/Options).
 
 --- Reads a source's values for this frame.
 ---@alias ReadCheckValues fun(sourceID: string): curr: number?, max: number?, stacks: number?
+
+--- Reads whether a source's ability is usable now (see dataSources.Usable):
+--- nil when that can't be told (it isn't on an action bar).
+---@alias ReadUsable fun(sourceID: string): boolean?
 
 -- Percent checks compare against the value as a percentage of its max.
 local PERCENT = 100
@@ -60,6 +64,23 @@ conditions.CHECKS = {
     { id = "stacks", label = "Stacks", types = { buff = true, debuff = true } },
     { id = "charges", label = "Charges", types = { cooldown = true } },
 }
+
+-- A State check's values that test whether an ability is usable rather than
+-- active: whether the game's action bars show it usable, as they dim it
+-- while it can't be (the wrong weapon, a missing shield, too little
+-- adrenaline for its current cost).
+conditions.USABLE, conditions.NOT_USABLE = "usable", "unusable"
+-- Data types whose State checks can test it.
+conditions.USABLE_TYPES = { cooldown = true }
+-- Data types whose sources are cooldowns, where active means on cooldown.
+conditions.COOLDOWN_TYPES = { cooldown = true, specialAttack = true, extraAction = true }
+
+--- Whether a State check's value tests usability (see USABLE).
+---@param value any A check's value.
+---@return boolean
+function conditions.IsUsableValue(value)
+    return value == conditions.USABLE or value == conditions.NOT_USABLE
+end
 
 -- Short words, read after "Which is" (Which is: Below 15). Symbols can't
 -- work: game text reads "<" as the start of a tag (<col=ff0000>), so a bare one
@@ -175,16 +196,24 @@ local function checkedSource(check, ownSource)
     return check.source
 end
 
---- Whether one check passes.
+--- Whether one check passes. A State check for usable or not usable on an
+--- ability that can't be told (it isn't on an action bar) passes either way,
+--- so it never blocks.
 ---@param check Check
 ---@param ownSource string? The aura's source.
 ---@param read ReadCheckValues
+---@param readUsable ReadUsable? nil: Usable checks pass.
 ---@return boolean
-function conditions.CheckPasses(check, ownSource, read)
+function conditions.CheckPasses(check, ownSource, read, readUsable)
     local sourceID = checkedSource(check, ownSource)
     if sourceID == nil then return false end
-    local curr, max, stacks = read(sourceID)
     local kind = check.kind
+    if kind == "active" and conditions.IsUsableValue(check.value) then
+        local usable = readUsable and readUsable(sourceID)
+        if usable == nil then return true end
+        return usable == (check.value == conditions.USABLE)
+    end
+    local curr, max, stacks = read(sourceID)
     if kind == "active" then
         local isActive = curr ~= nil and curr > 0
         local wantsActive = check.value ~= false
@@ -215,20 +244,22 @@ end
 ---@param match string? "any", or anything else for all.
 ---@param ownSource string? The aura's source.
 ---@param read ReadCheckValues
+---@param readUsable ReadUsable?
 ---@return boolean
-function conditions.ChecksPass(checks, match, ownSource, read)
+function conditions.ChecksPass(checks, match, ownSource, read, readUsable)
     if checks == nil or #checks == 0 then return false end
     local needsAny = match == "any"
     for _, check in ipairs(checks) do
         -- The first pass decides "any"; the first failure decides "all".
-        if conditions.CheckPasses(check, ownSource, read) == needsAny then return needsAny end
+        if conditions.CheckPasses(check, ownSource, read, readUsable) == needsAny then return needsAny end
     end
     return not needsAny
 end
 
 --- Whether any check reads a value that moves between server ticks, so it
 --- has to be tested every Logic tick; other values only change once a server
---- tick. A stack count only changes on a server tick, whatever its source.
+--- tick. A stack count only changes on a server tick, whatever its source,
+--- and whether an ability is usable needn't be known sooner.
 ---@param checks Check[]?
 ---@param ownSource string? The aura's source.
 ---@param isSmooth fun(sourceID: string): boolean Whether a source's value is extrapolated between ticks (timers).
@@ -236,7 +267,8 @@ end
 function conditions.ChecksNeedEveryLogicTick(checks, ownSource, isSmooth)
     for _, check in ipairs(checks or {}) do
         local sourceID = checkedSource(check, ownSource)
-        if sourceID ~= nil and check.kind ~= "stacks" and isSmooth(sourceID) then return true end
+        local isTicked = check.kind == "stacks" or conditions.IsUsableValue(check.value)
+        if sourceID ~= nil and not isTicked and isSmooth(sourceID) then return true end
     end
     return false
 end
@@ -265,11 +297,12 @@ end
 ---@param list Condition[]
 ---@param ownSource string? The aura's source.
 ---@param read ReadCheckValues
+---@param readUsable ReadUsable?
 ---@return integer mask
-function conditions.Mask(list, ownSource, read)
+function conditions.Mask(list, ownSource, read, readUsable)
     local mask = 0
     for index, condition in ipairs(list) do
-        if conditions.ChecksPass(condition.checks, condition.match, ownSource, read) then
+        if conditions.ChecksPass(condition.checks, condition.match, ownSource, read, readUsable) then
             mask = mask | maskBit(index)
         end
     end
@@ -340,7 +373,7 @@ end
 function conditions.NewCheck(kind)
     kind = kind or "active"
     local value
-    if kind == "active" then value = true else value = 0 end
+    if conditions.Compares(kind) then value = 0 else value = true end
     return { kind = kind, op = "lt", value = value }
 end
 

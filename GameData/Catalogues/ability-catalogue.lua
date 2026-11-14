@@ -25,6 +25,16 @@ local abilityCatalogue = {}
 ---@field channelled boolean? COMBATV2_ABILITY_IS_CHANNELLED.
 ---@field key string? Names it across versions (see Key).
 ---@field stages AbilityStage[]? What it turns into as it's used, in order (Dismember: Slaughter, then Massacre).
+---@field command AbilityCommand? For a conjure, the command the action bar swaps it for while the conjure is out.
+---@field movedFrom string[]? Ids of abilities left out in its favour (see REPLACED_BY), so auras saved with them follow it.
+
+--- The command a conjure turns into on the action bar while the conjure is
+--- out (Conjure Skeleton Warrior, then Command Skeleton Warrior).
+---@class AbilityCommand
+---@field label string? nil if its struct couldn't be read.
+---@field icon integer?
+---@field var string The command's cooldown var base.
+---@field activeVar string COMBATV2_ABILITY_<conjure>_ACTIVE, 1 while the conjure is out.
 
 --- A later stage of an ability that turns into others as it's used: its
 --- recast, COMBATV2_ABILITY_<var name>_RECAST_<n>. It's the current stage
@@ -108,6 +118,22 @@ local GREATER_ALIASES = {
 local GREATER_ICONS = {
     MAGIC_GREATER_SUNSHINE = 20184,
     RANGED_GREATER_DEATHS_SWIFTNESS = 20186,
+}
+-- Conjures (by var name) to the command the action bar shows in their
+-- place while they're out, which has its own cooldown. Conjure Undead Army
+-- is left out: it summons up to all four, so which command isn't known.
+local COMMANDS = {
+    NECROMANCY_CONJURE_SKELETON_WARRIOR = "NECROMANCY_COMMAND_SKELETON_WARRIOR",
+    NECROMANCY_CONJURE_PUTRID_ZOMBIE = "NECROMANCY_COMMAND_PUTRID_ZOMBIE",
+    NECROMANCY_CONJURE_VENGEFUL_GHOST = "NECROMANCY_COMMAND_VENGEFUL_GHOST",
+    NECROMANCY_CONJURE_PHANTOM_GUARDIAN = "NECROMANCY_COMMAND_PHANTOM_GUARDIAN",
+}
+-- Abilities left out of the list, to the ability listed in their place,
+-- which shares their cooldown var. Auras saved with them move to it.
+local REPLACED_BY = {
+    -- "Magma Tempest (Targeted)": the targeted mode of the same ability, which
+    -- MAGIC_MAGMA_TEMPEST_REVOLUTION lists as plain Magma Tempest.
+    MAGIC_MAGMA_TEMPEST = "MAGIC_MAGMA_TEMPEST_REVOLUTION",
 }
 -- Greater versions unlocked from codices in Elite Dungeon 2, by ability name,
 -- with their unlock flag and COMBAT_ABILITY_ICON_MUTATED_<ABILITY> sprite.
@@ -240,6 +266,40 @@ local function abilityStages(varName)
     return stages
 end
 
+--- The command a conjure turns into while it's out (see COMMANDS).
+---@param varName string The conjure's cooldown var without COMBATV2_COOLDOWN_.
+---@return AbilityCommand? command nil for anything but a listed conjure, or one whose vars aren't there.
+local function conjureCommand(varName)
+    local commandName = COMMANDS[varName]
+    if commandName == nil then return nil end
+    local activeVar = STRUCT_PREFIX .. varName .. ACTIVE_SUFFIX
+    local commandVar = abilityCatalogue.COOLDOWN_VAR_PREFIX .. commandName
+    if not varExists(activeVar) or not varExists(commandVar .. "_START") then return nil end
+    local struct = gameApi.Struct(STRUCT_PREFIX .. commandName)
+    local label = struct and readParam(struct, NAME_PARAM)
+    local icon = struct and readParam(struct, ICON_PARAM)
+    return {
+        label = type(label) == "string" and label ~= "" and label or nil,
+        icon = type(icon) == "number" and icon or nil,
+        var = commandVar,
+        activeVar = activeVar,
+    }
+end
+
+--- The ids of the abilities left out in an ability's favour (see REPLACED_BY).
+---@param name string The ability's name (see abilityName).
+---@return string[]? ids nil if none were.
+local function replacedIDs(name)
+    local ids = nil
+    for replaced, replacement in pairs(REPLACED_BY) do
+        if replacement == name then
+            ids = ids or {}
+            ids[#ids + 1] = abilityCatalogue.SOURCE_ID_PREFIX .. string.lower(replaced)
+        end
+    end
+    return ids
+end
+
 --- Adds a style enum's entry to the list, if it's an ability with a
 --- cooldown var pair. Several abilities can share one cooldown, so entries
 --- are kept apart by struct rather than by var.
@@ -249,7 +309,7 @@ local function addEntry(entry, seen)
     local struct = entry[ENUM_VALUE]
     local structName = struct and tostring(gameApi.ConfigName(struct) or "") or ""
     local name = abilityName(structName)
-    if name == nil or seen[name] then return end
+    if name == nil or seen[name] or REPLACED_BY[name] then return end
     local varName = VAR_ALIASES[name] or name
     local varBase = abilityCatalogue.COOLDOWN_VAR_PREFIX .. varName
     if not varExists(varBase .. "_START") or not varExists(varBase .. "_END") then return end
@@ -269,6 +329,8 @@ local function addEntry(entry, seen)
         channelled = readParam(struct, CHANNELLED_PARAM) == IS_CHANNELLED,
         key = abilityCatalogue.Key(abilityID, skill),
         stages = abilityStages(varName),
+        command = conjureCommand(varName),
+        movedFrom = replacedIDs(name),
     }
 end
 

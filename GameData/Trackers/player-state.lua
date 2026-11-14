@@ -2,10 +2,11 @@
 -- of their equipped weapons, for load options (see
 -- Auras/Registries/load-options), and whether the magic master cape's perk
 -- is on, for spells' lengths. Polled when asked (load options read each
--- once a frame), through cached var configs so they skip the by-name lookup.
+-- once a server tick), through var-cache.
 
 local gameApi = require("GameData/game-api")
 local gameClock = require("GameData/Trackers/game-clock")
+local varCache = require("GameData/Trackers/var-cache")
 
 local playerState = {}
 
@@ -14,14 +15,15 @@ local playerState = {}
 -- COMBATV2_MAINHAND_STYLE / _OFFHAND_STYLE value to style, the same for
 -- one- and two-handed, plain and augmented weapons. They may be weapon
 -- categories rather than styles, so other weapon types could use other
--- values: unknown ones are logged once. 9 is Malachi's tooth, a crossbow.
+-- values: unknown ones are logged once. 9 is Malachi's tooth, a crossbow;
+-- 5 an off-hand melee weapon or defender (Dark Sliver of Leng, Kalphite defender).
 ---@type table<integer, WeaponStyle>
-local STYLES = { [6] = "melee", [8] = "ranged", [9] = "ranged", [1] = "magic", [37] = "necromancy" }
+local STYLES = { [6] = "melee", [5] = "melee", [8] = "ranged", [9] = "ranged", [1] = "magic", [37] = "necromancy" }
 -- 7 is nothing equipped and -1 an empty off hand. 0 is taken as no weapon
 -- rather than an unknown style.
 local NO_WEAPON = { [7] = true, [-1] = true, [0] = true }
 
-local readVarPlayer = gameApi.CachedVarPlayer
+local readVarPlayer = varCache.VarPlayer
 
 --- Whether the player is in combat.
 ---@return boolean? inCombat nil out of game.

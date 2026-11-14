@@ -50,11 +50,11 @@ end
 -- Lookup function to its cache of name to result.
 local lookupCaches = {}
 
---- A by-name lookup (e.g. gameApi.VarClient, gameApi.Param), remembered
---- once found, so something read every frame skips it. A miss isn't
---- remembered: config may not be readable before entering the game.
----@param lookup fun(name: string): any
----@param name string
+--- A lookup by name or id (e.g. gameApi.VarClient, gameApi.ItemConfigName),
+--- remembered once found, so something read every frame skips it. A miss
+--- isn't remembered: config may not be readable before entering the game.
+---@param lookup fun(name: string|integer): any
+---@param name string|integer
 ---@return any found nil if not found (yet).
 function gameApi.Cached(lookup, name)
     local cache = lookupCaches[lookup]
@@ -247,6 +247,17 @@ local function isIntegerVar(varConfig) return varConfig.valueType == ValueType.I
 ---@return boolean
 function gameApi.IsIntegerVar(varConfig) return Read("a var's type", isIntegerVar, varConfig) == true end
 
+local function baseVarName(varConfig)
+    if not varConfig.isVarBit then return nil end
+    return varConfig.baseVar.configName
+end
+--- The name of a varbit's base VarPlayer, which VarTransmit names when the
+--- varbit changes (never the varbit itself).
+---@param varConfig userdata
+---@return string? baseName nil for a var that isn't a varbit, or if it can't be read.
+---@return boolean ok false if it couldn't be read.
+function gameApi.BaseVarName(varConfig) return Read("a varbit's base var", baseVarName, varConfig) end
+
 --- A VarPlayer's value through its cached config, for vars read every frame.
 ---@param name string
 ---@return any value nil when it doesn't exist (yet) or can't be read.
@@ -349,12 +360,51 @@ local function textContent(component) return component.content end
 ---@return string? text nil if it can't be read.
 function gameApi.TextContent(component) return (Read("an interface text", textContent, component)) end
 
+local function width(component) return component.width end
+
+--- A game interface component's width, in interface units.
+---@param component userdata
+---@return integer? width nil if it can't be read.
+function gameApi.Width(component) return (Read("an interface width", width, component)) end
+
 local function spriteID(component) return component.spriteID end
 
 --- The sprite a game interface's sprite component shows.
 ---@param component userdata
 ---@return integer? spriteID -1 when it shows none; nil if it can't be read.
 function gameApi.SpriteID(component) return (Read("an interface sprite", spriteID, component)) end
+
+local function tint(component) return component.rgb end
+
+--- The colour a game interface component is tinted with, 0xRRGGBB (0xFFFFFF
+--- for none).
+---@param component userdata
+---@return integer? rgb nil if it can't be read.
+function gameApi.Tint(component) return (Read("an interface tint", tint, component)) end
+
+local function isShown(component) return component.visibleGlobal end
+
+--- Whether a game interface component is shown: it and every parent are visible.
+---@param component userdata
+---@return boolean? shown nil if it can't be read.
+function gameApi.IsShown(component) return (Read("an interface component's visibility", isShown, component)) end
+
+local function associatedObjectID(component) return component.associatedObjectID end
+
+--- The item a game interface's sprite component shows in place of a sprite.
+---@param component userdata
+---@return integer? itemID -1 when it shows no item; nil if it can't be read.
+function gameApi.AssociatedObjectID(component) return (Read("an interface item icon", associatedObjectID, component)) end
+
+local function eachDynamicChild(component, visit) component:IterateDynamicComponents(visit) end
+
+--- Calls `visit` with each of a game interface component's dynamic children
+--- (the ones the game's scripts make) until it returns true.
+---@param component userdata
+---@param visit fun(child: userdata): boolean?
+function gameApi.EachDynamicChild(component, visit)
+    Read("an interface's dynamic components", eachDynamicChild, component, visit)
+end
 
 --- The loaded NPC an NPC var's uid names.
 ---@param uid integer

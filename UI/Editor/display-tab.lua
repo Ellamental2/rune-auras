@@ -3,7 +3,6 @@
 -- Position). Display types add their own controls through their TypeEditor.
 
 local anchors = require("Auras/Helpers/anchors")
-local auraManager = require("Auras/aura-manager")
 local auraStore = require("Auras/Store/aura-store")
 local displayTypes = require("Auras/Registries/display-types")
 local fontCatalogue = require("GameData/Catalogues/font-catalogue")
@@ -67,13 +66,20 @@ end
 ---@param showOption { field: string, label: string }? The checkbox that switches the text on; nil for none.
 ---@param context EditorTabContext
 ---@param sourceID string? The aura's source, which decides the text's fields.
-local function buildTextOptions(view, textHolder, update, showOption, context, sourceID)
+---@param hideWhenReadyLabel string? A text node's Hide when ready checkbox's label; nil for none.
+local function buildTextOptions(view, textHolder, update, showOption, context, sourceID, hideWhenReadyLabel)
+    local checkboxes = {}
     if showOption ~= nil then
-        local field = showOption.field
-        view:AddCheckboxButton({
-            { text = showOption.label, value = field, selected = textHolder[field] == true },
-        }, {
-            onChange = function(_, _, _, selected) update(field, selected == true) end,
+        checkboxes[#checkboxes + 1] = { text = showOption.label, value = showOption.field,
+            selected = textHolder[showOption.field] == true }
+    end
+    if hideWhenReadyLabel ~= nil then
+        checkboxes[#checkboxes + 1] = { text = hideWhenReadyLabel, value = "hideWhenReady",
+            selected = textHolder.hideWhenReady == true }
+    end
+    if #checkboxes > 0 then
+        view:AddCheckboxButton(checkboxes, {
+            onChange = function(_, _, field, selected) update(field, selected == true) end,
         })
     end
 
@@ -168,15 +174,16 @@ end
 --- The X/Y offsets' ranges: what keeps the aura on screen at the top level,
 --- or up to a screen's width or height either way from its group's point.
 ---@param aura Aura
+---@param screenSize ScreenSizeFunction
 ---@return number? minX nil if the game area's size is unknown.
 ---@return number? maxX
 ---@return number? minY
 ---@return number? maxY
-local function positionRange(aura)
+local function positionRange(aura, screenSize)
     local parentWidth, parentHeight = parentSize()
     if parentWidth == nil then return nil end
     if aura.group ~= nil then return -parentWidth, parentWidth, -parentHeight, parentHeight end
-    local width, height = auraManager.ScreenSize(aura)
+    local width, height = screenSize(aura)
     return anchors.OffsetRange(aura.anchor, width, height, parentWidth, parentHeight)
 end
 
@@ -229,8 +236,10 @@ end
 --- drawn on top), then Add text.
 ---@param aura Aura
 ---@param context EditorTabContext
-local function buildTextNodes(aura, context)
+---@param typeEditor TypeEditor
+local function buildTextNodes(aura, context, typeEditor)
     local texts = aura.texts
+    local hideWhenReadyLabel = typeEditor.hideWhenReadyLabel and typeEditor.hideWhenReadyLabel(aura) or nil
     local function editTexts(change, rebuild)
         auraStore.Edit(aura.id, change)
         context.changed("texts")
@@ -243,7 +252,7 @@ local function buildTextNodes(aura, context)
         -- Keyed by aura and the node's key, so collapsing one follows it
         -- when it moves.
         context.section("text:" .. tostring(aura.id) .. ":" .. tostring(node.key), "Text " .. index, function(view)
-            buildTextOptions(view, node, nodeUpdate, SHOW_TEXT, context, aura.source)
+            buildTextOptions(view, node, nodeUpdate, SHOW_TEXT, context, aura.source, hideWhenReadyLabel)
             buildTextPosition(view, node, nodeUpdate)
         end, textNodeButtons(aura, index, editTexts))
     end
@@ -273,7 +282,7 @@ local function addAnchorPicker(view, aura, context)
             local anchor = anchorList[entryID]
             if anchor == nil or anchor.id == aura.anchor then return end
             -- Keep it where it is on screen; only the offset changes.
-            local width, height = auraManager.ScreenSize(aura)
+            local width, height = context.screenSize(aura)
             local areaWidth, areaHeight = parentSize()
             auraStore.SetAnchor(aura.id, anchor.id, width, height, areaWidth, areaHeight)
             context.changed("anchor")
@@ -296,7 +305,7 @@ local function buildPositionOptions(view, aura, update, context)
 
     -- Without a known parent size the ranges are unknown, so fall back to
     -- plain fields.
-    local minX, maxX, minY, maxY = positionRange(aura)
+    local minX, maxX, minY, maxY = positionRange(aura, context.screenSize)
     local sizeKnown = minX ~= nil
     local offsetTooltip = inGroup and "Right and down from the group's point" or "Positive is inwards"
     positionInputs = {
@@ -352,8 +361,9 @@ end
 --- depend on the aura's size), matching where the display clamps itself.
 ---@param aura Aura
 ---@param update fun(key: string, value: any)
-local function refreshPositionRange(aura, update)
-    local minX, maxX, minY, maxY = positionRange(aura)
+---@param screenSize ScreenSizeFunction
+local function refreshPositionRange(aura, update, screenSize)
+    local minX, maxX, minY, maxY = positionRange(aura, screenSize)
     if minX == nil then return end
     local x = math.max(minX, math.min(maxX, aura.x))
     local y = math.max(minY, math.min(maxY, aura.y))
@@ -412,12 +422,12 @@ end
 
 --- Builds the tab for an aura.
 ---@param aura Aura
----@param context EditorTabContext Needs update, changed and typeEditor.
+---@param context EditorTabContext Needs update, changed, typeEditor and screenSize.
 function displayTab.Build(aura, context)
     local update, typeEditor = context.update, context.typeEditor
     local function updateSize(key, value)
         update(key, value)
-        refreshPositionRange(aura, update)
+        refreshPositionRange(aura, update, context.screenSize)
     end
 
     buildGeneral(aura, context)
@@ -445,9 +455,9 @@ function displayTab.Build(aura, context)
     -- An aura switched to a type without nodes (Text) keeps its old ones,
     -- unused, so the type decides.
     local displayType = displayTypes.Get(aura.display)
-    local drawsTextNodes = displayType ~= nil and displayType.module.usesTextNodes
+    local drawsTextNodes = displayType ~= nil and displayType.options.usesTextNodes
     if aura.texts ~= nil and drawsTextNodes then
-        buildTextNodes(aura, context)
+        buildTextNodes(aura, context, typeEditor)
     elseif usesText(typeEditor, aura) then
         context.section("text", "Text", function(view)
             local showOption = typeEditor.usesShowText ~= false and (typeEditor.showTextOption or SHOW_TEXT) or nil

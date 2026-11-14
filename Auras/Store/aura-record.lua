@@ -119,7 +119,7 @@ end
 local function applyDisplayDefaults(aura)
     local displayType = displayTypes.Get(aura.display)
     if displayType == nil then return end
-    for key, value in pairs(displayType.module.defaults or {}) do
+    for key, value in pairs(displayType.options.defaults or {}) do
         if aura[key] == nil then aura[key] = value end
     end
 end
@@ -131,7 +131,7 @@ end
 local function dropBarBackground(aura)
     if aura.display ~= ICON_DISPLAY then return end
     local barType = displayTypes.Get(BAR_DISPLAY)
-    local barBackground = barType and barType.module.defaults.backgroundColour
+    local barBackground = barType and barType.options.defaults.backgroundColour
     if aura.backgroundColour == barBackground then aura.backgroundColour = nil end
 end
 
@@ -144,6 +144,20 @@ local LINEAR_SWIPE = "linear"
 ---@param aura Aura Changed in place.
 local function renameVerticalWipe(aura)
     if aura.display == ICON_DISPLAY and aura.swipeStyle == OLD_LINEAR_SWIPE then aura.swipeStyle = LINEAR_SWIPE end
+end
+
+--- Gives each of an aura's checks the data type its source is in now (see
+--- dataSources.CurrentType): types can be renamed or split, as Resource
+--- became Player and Target.
+---@param aura Aura Changed in place.
+local function updateCheckTypes(aura)
+    local function update(check)
+        check.sourceType = dataSources.CurrentType(check.sourceType, check.source)
+    end
+    for _, condition in ipairs(aura.conditions or {}) do
+        for _, check in ipairs(condition.checks) do update(check) end
+    end
+    for _, check in ipairs(aura.load and aura.load.checks or {}) do update(check) end
 end
 
 --- Drops an aura's empty condition list and load tables, so an aura with
@@ -244,13 +258,13 @@ local function prepareDisplayChange(aura, newDisplay)
     -- wasn't picked, so it goes back to the store's default rather than
     -- following the aura into a type without one.
     local oldType = displayTypes.Get(aura.display)
-    local oldDefaults = oldType and oldType.module.defaults or {}
+    local oldDefaults = oldType and oldType.options.defaults or {}
     if oldDefaults.colour ~= nil and aura.colour == oldDefaults.colour then aura.colour = DEFAULT_COLOUR end
     -- Options mean different things per display type (a bar is wide, an
     -- icon square with a thinner border), so take all of the new type's
     -- defaults rather than keeping the old type's values.
     local newType = displayTypes.Get(newDisplay)
-    for option, default in pairs(newType and newType.module.defaults or {}) do
+    for option, default in pairs(newType and newType.options.defaults or {}) do
         aura[option] = default
     end
     local leavingTextNodes = auraTexts.TypeUsesNodes(aura.display) and not auraTexts.TypeUsesNodes(newDisplay)
@@ -410,6 +424,7 @@ function auraRecord.FromSaved(saved)
     aura.enabled = saved.enabled ~= false
     -- Source ids can be renamed (e.g. cooldowns now follow their var name).
     if aura.source ~= nil then aura.source = dataSources.CurrentID(aura.source) end
+    updateCheckTypes(aura)
     aura.colour = aura.colour or DEFAULT_COLOUR
     aura.showText = saved.showText ~= false
     aura.unlocked = saved.unlocked == true
@@ -429,6 +444,7 @@ function auraRecord.FromSaved(saved)
     aura.textTemplate = aura.textTemplate or textTemplate.DEFAULT
     auraTexts.Ensure(aura)
     auraTexts.Fill(aura)
+    auraTexts.MoveHideWhenReady(aura)
     auraRecord.Tidy(aura)
     return aura
 end

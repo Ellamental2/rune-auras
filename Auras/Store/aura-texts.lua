@@ -15,6 +15,7 @@ local savedValues = require("Auras/Store/saved-values")
 ---@class TextNode
 ---@field key integer? Stable id, for conditions that change it (see Change.text); never reused.
 ---@field showText boolean Whether it's drawn.
+---@field hideWhenReady boolean Blank while a cooldown is ready or a buff inactive (only an Icon has either).
 ---@field textTemplate string
 ---@field textColour integer 0xRRGGBBAA.
 ---@field textFont string
@@ -68,6 +69,9 @@ function auraTexts.New(aura)
     return {
         key = auraTexts.NextKey(aura),
         showText = true,
+        -- An Icon's hideTextWhenReady was once the aura's, for every text:
+        -- a record saved then gives its nodes its setting (see MoveHideWhenReady).
+        hideWhenReady = aura.hideTextWhenReady ~= false,
         textTemplate = aura.textTemplate or textTemplate.DEFAULT,
         textColour = aura.textColour or auraTexts.DEFAULT_COLOUR,
         textFont = aura.textFont or fontCatalogue.DEFAULT_FONT,
@@ -96,7 +100,7 @@ end
 ---@return boolean
 function auraTexts.TypeUsesNodes(display)
     local displayType = displayTypes.Get(display)
-    return displayType ~= nil and displayType.module.usesTextNodes == true
+    return displayType ~= nil and displayType.options.usesTextNodes == true
 end
 
 --- Gives a Bar or Icon without text nodes one, made from its own text
@@ -130,6 +134,14 @@ function auraTexts.Fill(aura)
         end
         seenKeys[node.key] = true
     end
+end
+
+--- Drops the aura-wide hideTextWhenReady an Icon had before each text node
+--- had its own, once its nodes have been given it (by Ensure and Fill, as
+--- a new node's default).
+---@param aura Aura Changed in place.
+function auraTexts.MoveHideWhenReady(aura)
+    aura.hideTextWhenReady = nil
 end
 
 --- Copies the first node's text styling onto the aura's own text fields,

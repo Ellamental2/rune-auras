@@ -12,21 +12,10 @@ local TextNodes = require("Auras/Displays/Parts/text-nodes")
 local gameApi = require("GameData/game-api")
 local textTemplate = require("Auras/Helpers/text-template")
 local maths = require("Auras/Helpers/maths")
+local orbOptions = require("Auras/Displays/Options/orb")
 
 local clamp = maths.Clamp
-
---- An orb aura's own options.
----@class OrbOptions: Aura
----@field fillStyle "vertical"|"radial"
----@field fillAnticlockwise boolean A radial fill's edge turns anticlockwise rather than clockwise.
----@field backgroundColour integer
----@field borderColour integer
----@field borderThickness integer
----@field invertFill boolean Fill as the value drops.
----@field smoothFill boolean Move the fill every frame for sources that extrapolate between server ticks.
----@field hideWhenEmpty boolean Hide while the value is 0, except while unlocked.
----@field showIcon boolean The source's icon in the middle, under the fill, which sweeps over it like the Icon display's swipe.
----@field dimWhileActive boolean Grey the icon while the value is above 0 (a buff: while inactive), as the Icon display does.
+local defaults = orbOptions.defaults
 
 ---@class Orb: Placed
 ---@field circle userdata? The circle image; nil until a plugin refresh loads it.
@@ -47,41 +36,15 @@ local clamp = maths.Clamp
 ---@field iconGrey userdata? The icon's grey copy, if we ship one.
 ---@field iconSpriteID integer? The source's icon, from SetDetails.
 ---@field iconObjectID integer?
----@field partsMade boolean? A part was made or shown again, so the aura manager calls RaiseParts next frame.
 ---@field texts TextNodes
 local Orb = {}
 Orb.__index = Orb
 placement.Mixin(Orb)
--- Its value texts are text nodes (see auraTexts.Ensure in Auras/Store/aura-texts).
-Orb.usesTextNodes = true
 
-Orb.defaults = {
-    -- Kept equal; the editor offers a single size (see UI/Editor/Types/orb).
-    width = 64,
-    height = 64,
-    fillStyle = "vertical",
-    fillAnticlockwise = false,
-    backgroundColour = 0x000000B4,
-    borderColour = 0x000000FF,
-    borderThickness = 2,
-    invertFill = false,
-    smoothFill = false,
-    hideWhenEmpty = false,
-    showIcon = false,
-    dimWhileActive = false,
-}
-
-Orb.FILL_STYLES = {
-    { id = "vertical", label = "Vertical" },
-    { id = "radial", label = "Radial" },
-}
-
-local MIN_SIZE, MAX_SIZE = 16, 256
-local MAX_BORDER = 10
+local MIN_SIZE, MAX_SIZE = orbOptions.limits.minSize, orbOptions.limits.maxSize
+local MAX_BORDER = orbOptions.limits.maxBorder
 -- The border leaves at least this much orb inside it.
 local MIN_INNER_SIZE = 4
--- Shared with the orb's editor controls (UI/Editor/Types/orb).
-Orb.limits = { minSize = MIN_SIZE, maxSize = MAX_SIZE, maxBorder = MAX_BORDER }
 
 local UNLOCKED_BACKGROUND_RGBA = placement.UNLOCKED_BACKGROUND_RGBA
 -- A dimmed icon without a grey copy (an item, or a sprite we have none of)
@@ -139,6 +102,7 @@ end
 --- next frame (RaiseParts).
 ---@param part userdata
 ---@param shown boolean
+---@private
 function Orb:showPart(part, shown)
     local wasHidden = part.hidden == true
     part.hidden = not shown
@@ -151,6 +115,7 @@ end
 ---@param circle userdata
 ---@param flags integer
 ---@param image userdata? The mask; the circle image if nil.
+---@private
 function Orb:shape(circle, flags, image)
     image = image or self.circle
     if image == nil then return end
@@ -203,12 +168,13 @@ end
 --- reach halfway under the ring, so no seam shows where their soft edges
 --- meet, even with a ring a little thinner than the border.
 ---@param aura OrbOptions
+---@private
 function Orb:layoutCircles(aura)
-    local size = clamp(aura.width or Orb.defaults.width, MIN_SIZE, MAX_SIZE)
+    local size = clamp(aura.width or defaults.width, MIN_SIZE, MAX_SIZE)
     self.width, self.height = size, size
     self.root:SetSize(size, size)
     local thickestBorder = math.min(MAX_BORDER, (size - MIN_INNER_SIZE) // 2)
-    local border = clamp(aura.borderThickness or Orb.defaults.borderThickness, 0, thickestBorder)
+    local border = clamp(aura.borderThickness or defaults.borderThickness, 0, thickestBorder)
     self.frame:SetSize(size, size)
     if border > 0 then self:shape(self.frame, 0, ringFor(border, size)) end
     tint(self.frame, aura.borderColour)
@@ -224,6 +190,7 @@ end
 --- Sets up the fill style's parts, making them when first used and hiding
 --- the other style's.
 ---@param aura OrbOptions
+---@private
 function Orb:applyFill(aura)
     self.fillStyle = aura.fillStyle == "radial" and "radial" or "vertical"
     local inset, size = self.fillInset, self.fillSize
@@ -259,6 +226,7 @@ end
 
 --- Whether the icon is showing either of its sprites.
 ---@return boolean
+---@private
 function Orb:iconShowing()
     local icon = self.icon
     return icon ~= nil and not (icon.sprite.hidden and icon.objectSprite.hidden)
@@ -268,6 +236,7 @@ end
 --- image can't be masked to a shape in the client. Made or shown again, it
 --- lands out of place, so the parts are put back in order next frame
 --- (RaiseParts).
+---@private
 function Orb:drawIcon()
     if self.icon == nil then return end
     local wasShowing = self:iconShowing()
@@ -285,6 +254,7 @@ end
 --- Whether the icon should be greyed now: a cooldown while running, a buff
 --- while inactive, as the Icon display.
 ---@return boolean
+---@private
 function Orb:isDimmed()
     if not (self.showIcon and self.dimWhileActive) then return false end
     local isRunning = self.curr ~= nil and self.curr > 0
@@ -294,6 +264,7 @@ end
 --- Greys the icon while dimmed: its grey copy laid over it (same shape, so
 --- it covers it), else a darkening tint. Only does anything when that
 --- changed, so redraw can call it with every value.
+---@private
 function Orb:applyDimmed()
     if self.icon == nil then return end
     local dimmed = self:isDimmed()
@@ -317,6 +288,7 @@ function Orb:applyDimmed()
 end
 
 --- Places the grey copy over the icon.
+---@private
 function Orb:layoutGrey()
     if self.greySprite == nil then return end
     self.greySprite:SetPos(self.iconOffset, self.iconOffset)
@@ -325,6 +297,7 @@ end
 
 --- Places the icon, making it the first time it's wanted.
 ---@param aura OrbOptions
+---@private
 function Orb:applyIcon(aura)
     self.showIcon = aura.showIcon == true
     if not self.showIcon and self.icon == nil then return end
@@ -375,20 +348,20 @@ function Orb:Apply(aura)
     self:redraw()
 end
 
---- The source's name, for $name, $ammo and $target, and its icon. Called every
---- frame; "Any channel" changes them with the channel.
+--- The source's name, for $name, $ammo, $target and $keybind, and its icon.
+--- Called every frame; "Any channel" changes them with the channel.
 ---@param name string?
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@param ammo string?
----@param target TargetInfo?
-function Orb:SetDetails(name, spriteID, objectID, ammo, target)
+---@param info TextInfo?
+function Orb:SetDetails(name, spriteID, objectID, ammo, info)
     if spriteID ~= self.iconSpriteID or objectID ~= self.iconObjectID then
         self.iconSpriteID, self.iconObjectID = spriteID, objectID
         self:drawIcon()
     end
-    if name == self.name and ammo == self.ammo and target == self.target then return end
-    self.name, self.ammo, self.target = name, ammo, target
+    if name == self.name and ammo == self.ammo and info == self.info then return end
+    self.name, self.ammo, self.info = name, ammo, info
     self:redraw()
 end
 
@@ -410,6 +383,7 @@ end
 --- border, so the part under it doesn't count, but reaches under it at
 --- the bottom, and at the top once full.
 ---@param ratio number 0 to 1.
+---@private
 function Orb:drawFill(ratio)
     if self.fillStyle == "radial" then
         self.radial.curValue = (1 - ratio) * RADIAL_END
@@ -426,6 +400,7 @@ function Orb:drawFill(ratio)
 end
 
 --- Draws the current values: hiding, fill and texts.
+---@private
 function Orb:redraw()
     local curr, max = self.curr, self.max
     local isEmpty = curr == nil or curr <= 0
@@ -443,7 +418,7 @@ function Orb:redraw()
     self:applyDimmed()
     -- Each text only reformats when its values change (see TextNodes:SetValues).
     local textShown = true
-    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.target, textShown, textTemplate.NO_DATA)
+    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.info, textShown, textTemplate.NO_DATA)
 end
 
 --- Destroys the orb and everything in it.

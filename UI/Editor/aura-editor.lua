@@ -26,6 +26,7 @@ local loadTab = require("UI/Editor/load-tab")
 ---@field usesText (boolean|fun(aura: Aura): boolean)? false (or a function returning it for the aura) drops the Text section.
 ---@field usesShowText boolean? false drops Show text (the Text display is all text).
 ---@field showTextOption { field: string, label: string }? The Text section's checkbox in place of Show text (a Segmented bar's Show progress text).
+---@field hideWhenReadyLabel (fun(aura: Aura): string?)? Each text node's checkbox to blank it while the source is ready (TextNode.hideWhenReady), by its label for the aura's source; nil (or no function) for none.
 ---@field rebuildOn table<string, boolean>? Options that change which of its controls show; changing one rebuilds the editor.
 ---@field beginBuild fun()? Called at the start of every build, to drop controls kept from the last one (a collapsed section isn't rebuilt).
 
@@ -46,6 +47,7 @@ local loadTab = require("UI/Editor/load-tab")
 ---@field requestRebuild fun() Rebuilds next frame, after an edit that adds or removes controls.
 ---@field typeEditor TypeEditor
 ---@field onExport fun(auraID: integer)?
+---@field screenSize ScreenSizeFunction An aura's size on screen.
 
 ---@type table<DisplayID, TypeEditor>
 local TYPE_EDITORS = {
@@ -82,7 +84,7 @@ local TABS = {
     { text = "Load" },
 }
 
----@type { onAurasChanged: fun(key: string?)?, onExport: fun(auraID: integer)? }?
+---@type { onAurasChanged: fun(key: string?)?, onExport: fun(auraID: integer)?, screenSize: ScreenSizeFunction }?
 local handlers = nil
 local prettyUI = nil
 -- The layer the editor builds into, and what's in it: the tabs, or a hint
@@ -321,6 +323,7 @@ local function buildEditor(aura)
         requestRebuild = requestRebuild,
         typeEditor = typeEditor,
         onExport = handlers ~= nil and handlers.onExport or nil,
+        screenSize = handlers.screenSize,
     }
     if shown == TAB_DISPLAY then
         displayTab.Build(aura, context)
@@ -448,7 +451,7 @@ requestRebuild = function()
 end
 
 --- Sets what the editor reports.
----@param editorHandlers { onAurasChanged: fun(key: string?)?, onExport: fun(auraID: integer)? }
+---@param editorHandlers { onAurasChanged: fun(key: string?)?, onExport: fun(auraID: integer)?, screenSize: ScreenSizeFunction }
 function auraEditor.Init(editorHandlers)
     handlers = editorHandlers
 end

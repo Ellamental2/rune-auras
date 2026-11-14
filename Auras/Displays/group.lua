@@ -35,9 +35,6 @@ local gameApi = require("GameData/game-api")
 local Group = {}
 Group.__index = Group
 
--- Position only; see auraStore.CreateGroup.
-Group.defaults = {}
-
 local HANDLE_RGBA = 0x6B542050
 local HANDLE_BORDER_RGBA = 0xF2C66DFF
 local LABEL_RGBA = 0xF2C66DFF
@@ -98,6 +95,7 @@ end
 --- Lets the box be dragged by its handle, moving the layer. It follows the
 --- cursor (see drag-follow); without a mouse, ONHOLD moves it, and since the
 --- handle moves with the layer, only the offset from the grab point matters.
+---@private
 function Group:bindDrag()
     local handle = self.handle
     local root = self.root
@@ -199,6 +197,7 @@ end
 
 --- Places the box around the contents (with room for the name above), or
 --- on the point for an empty group.
+---@private
 function Group:layoutHandle()
     local left, top, right, bottom
     local bounds = self.bounds

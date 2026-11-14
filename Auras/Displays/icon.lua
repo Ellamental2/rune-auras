@@ -2,8 +2,9 @@
 -- nodes). A cooldown is greyed out while running, with the swipe over the
 -- time left; a buff is the other way round, greyed out while inactive, with
 -- the swipe over the time gone, like the game's buff bar. Other sources
--- (e.g. lifepoints) are never greyed out, and their linear wipe covers
--- what's missing, like the game's orbs.
+-- (e.g. lifepoints) are never greyed out, and their swipe covers what's
+-- missing, like the game's orbs. A radial over seconds times itself; over
+-- anything else (stacks, resources) it's drawn by hand.
 
 local Border = require("Auras/Displays/Parts/border")
 local placement = require("Auras/Displays/Parts/placement")
@@ -15,27 +16,11 @@ local gameApi = require("GameData/game-api")
 local SourceIcon = require("Auras/Displays/Parts/source-icon")
 local maths = require("Auras/Helpers/maths")
 local rectangles = require("Auras/Displays/Parts/rectangles")
+local iconOptions = require("Auras/Displays/Options/icon")
 
 local clamp = maths.Clamp
 local newRectangle = rectangles.Filled
-
---- An icon aura's own options.
----@class IconOptions: Aura
----@field swipeStyle "radial"|"linear"|"none"
----@field swipeColour integer
----@field iconColour integer Multiplied into the icon (white leaves it as it is), e.g. blue while there's not enough adrenaline, through a condition.
----@field backgroundColour integer Behind the icon: shows through its transparent parts (an item's edges).
----@field borderColour integer Drawn inside the icon's square; the icon is inset by its thickness.
----@field borderThickness integer
----@field invertSwipe boolean Cover what's done instead of what's left, so the swipe grows.
----@field swipeAnticlockwise boolean The radial's edge turns anticlockwise rather than clockwise.
----@field wipeDirection "right"|"left"|"down"|"up" The way the linear wipe grows: right from the left edge, left from the right, down from the top, up from the bottom.
----@field dimWhileActive boolean Grey the icon while the value is above 0 (a buff: while inactive).
----@field hideTextWhenReady boolean
----@field hideWhileInactive boolean Hide a buff's icon while it's inactive.
----@field hideWhileActive boolean Hide a buff's icon while it's active, e.g. to only show a missing buff.
----@field showActiveBelow number With hideWhileActive, show again once the time left drops to this many seconds (0: stays hidden).
----@field desaturate boolean? Set only by a condition: greyed whatever the value.
+local defaults = iconOptions.defaults
 
 ---@class Icon: Placed
 ---@field backing userdata
@@ -48,93 +33,14 @@ local newRectangle = rectangles.Filled
 ---@field radial userdata?
 ---@field wipe userdata?
 ---@field texts TextNodes
----@field partsMade boolean? A part was made or shown again, so the aura manager calls RaiseParts next frame.
 local Icon = {}
 Icon.__index = Icon
--- Its value texts are text nodes (see auraTexts.Ensure in Auras/Store/aura-texts).
-Icon.usesTextNodes = true
 placement.Mixin(Icon)
 
-Icon.defaults = {
-    -- Kept equal; the editor offers a single size (see UI/Editor/Types/icon).
-    width = 48,
-    height = 48,
-    swipeStyle = "radial",
-    swipeColour = 0x000000B4,
-    iconColour = 0xFFFFFFFF,
-    backgroundColour = 0x000000FF,
-    borderColour = 0x000000FF,
-    borderThickness = 1,
-    invertSwipe = false,
-    swipeAnticlockwise = false,
-    wipeDirection = "up",
-    dimWhileActive = true,
-    hideTextWhenReady = true,
-    hideWhileInactive = false,
-    hideWhileActive = false,
-    showActiveBelow = 0,
-}
-
--- The linear wipe's directions, named after the way it grows, as grow
--- directions are ("right": from the left edge).
-Icon.WIPE_DIRECTIONS = {
-    { id = "right", label = "Left to right" },
-    { id = "left", label = "Right to left" },
-    { id = "down", label = "Top to bottom" },
-    { id = "up", label = "Bottom to top" },
-}
-
-Icon.SWIPE_STYLES = {
-    { id = "radial", label = "Radial" },
-    { id = "linear", label = "Linear wipe" },
-    { id = "none", label = "None" },
-}
-
---- Whether a swipe style can be drawn for a source. The radial times itself
---- in seconds, so it only suits timers. An on/off source has no amount for
---- either to show.
----@param style string A SWIPE_STYLES id.
----@param source DataSource?
----@return boolean
-local function swipeFits(style, source)
-    if style == "none" then return true end
-    if source ~= nil and source.onOff then return false end
-    if style == "radial" then return source ~= nil and source.timed == true end
-    return true
-end
-
---- The swipe styles a source can be drawn with, for the editor.
----@param source DataSource?
----@return { id: string, label: string }[]
-function Icon.SwipeStylesFor(source)
-    local styles = {}
-    for _, style in ipairs(Icon.SWIPE_STYLES) do
-        if swipeFits(style.id, source) then styles[#styles + 1] = style end
-    end
-    return styles
-end
-
---- The swipe style drawn: the aura's, or the first after it that fits the
---- source (radial falls back to the linear wipe, then none).
----@param style string? The aura's swipeStyle.
----@param source DataSource?
----@return string
-function Icon.DrawnSwipe(style, source)
-    style = style or Icon.defaults.swipeStyle
-    local reached = false
-    for _, candidate in ipairs(Icon.SWIPE_STYLES) do
-        reached = reached or candidate.id == style
-        if reached and swipeFits(candidate.id, source) then return candidate.id end
-    end
-    return "none"
-end
-
-local MIN_SIZE, MAX_SIZE = 16, 128
-local MAX_BORDER = 10
+local MIN_SIZE, MAX_SIZE = iconOptions.limits.minSize, iconOptions.limits.maxSize
+local MAX_BORDER = iconOptions.limits.maxBorder
 -- The border leaves at least this much icon inside it.
 local MIN_INNER_SIZE = 4
--- Shared with the icon's editor controls (UI/Editor/Types/icon).
-Icon.limits = { minSize = MIN_SIZE, maxSize = MAX_SIZE, maxBorder = MAX_BORDER }
 
 local UNLOCKED_BACKING_RGBA = 0x6B5420FF
 local NORMAL_TINT = 0xFFFFFFFF
@@ -155,6 +61,10 @@ local RADIAL_DRIFT_SECONDS = 0.5
 -- tick adds 0.6s) restarts it partway too, so the swipe follows extensions
 -- tick by tick.
 local RADIAL_TOTAL_EPSILON = 0.05
+-- A radial drawn by hand, for values that aren't seconds (stacks,
+-- resources), runs from 0 to this, not timed: it draws what's left of the
+-- way round, so curValue is the part not covered (as the Orb's radial fill).
+local RADIAL_BY_HAND_END = 1
 -- With no data (e.g. a cooldown that can't be timed yet), show the plain
 -- icon rather than a placeholder.
 local EMPTY_TEXT = ""
@@ -243,7 +153,7 @@ function Icon.new(parent, aura, groupPoint)
 
     self.root = ui.Layer.new(parent)
     local ok, problem = pcall(function()
-        self.backing = newRectangle(self.root, aura.backgroundColour or Icon.defaults.backgroundColour)
+        self.backing = newRectangle(self.root, aura.backgroundColour or defaults.backgroundColour)
         self.backing:SetPos(0, 0)
         self.sprite = ui.Sprite.new(self.root)
         self.sprite:SetPos(0, 0)
@@ -307,6 +217,7 @@ for _, name in ipairs(ICON_COVERING_PARTS) do COVERS_ICON[name] = true end
 --- assigned to a part still 0 by 0, the grey copy drew nothing (a black
 --- box) and the radial no swipe, in game.
 ---@param part userdata
+---@private
 function Icon:coverIcon(part)
     part:SetPos(self.inset, self.inset)
     part:SetSize(self.innerSize, self.innerSize)
@@ -318,6 +229,7 @@ end
 --- next frame too (RaiseParts, called by the aura manager).
 ---@param name string A PARTS key.
 ---@return userdata part
+---@private
 function Icon:ensurePart(name)
     if self[name] ~= nil then return self[name] end
     self[name] = PARTS[name](self.root)
@@ -351,6 +263,7 @@ end
 --- so the parts are put back in order next frame (RaiseParts).
 ---@param part userdata?
 ---@param shown boolean
+---@private
 function Icon:showPart(part, shown)
     if part == nil then return end
     local wasHidden = part.hidden == true
@@ -361,13 +274,14 @@ end
 --- Sizes the square and its border, with the icon inset by the border's
 --- thickness. The border is only made once it has a thickness.
 ---@param aura IconOptions
+---@private
 function Icon:layoutFrame(aura)
-    local size = clamp(aura.width or Icon.defaults.width, MIN_SIZE, MAX_SIZE)
+    local size = clamp(aura.width or defaults.width, MIN_SIZE, MAX_SIZE)
     self.width, self.height = size, size
     self.root:SetSize(size, size)
     self.backing:SetSize(size, size)
     local thickestBorder = math.min(MAX_BORDER, (size - MIN_INNER_SIZE) // 2)
-    local border = clamp(aura.borderThickness or Icon.defaults.borderThickness, 0, thickestBorder)
+    local border = clamp(aura.borderThickness or defaults.borderThickness, 0, thickestBorder)
     local inner = size - border * 2
     self.inset, self.innerSize = border, inner
     if self.frame == nil and border > 0 then
@@ -389,6 +303,7 @@ end
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@return integer? shownSprite The sprite shown; nil for an item icon.
+---@private
 function Icon:showIcon(spriteID, objectID)
     self.iconSpriteID = spriteID
     local sprite = spriteID
@@ -411,8 +326,9 @@ end
 ---@param aura IconOptions
 ---@param source DataSource?
 ---@param sprite integer? The sprite shown (see showIcon).
+---@private
 function Icon:applySwipe(aura, source, sprite)
-    self.swipeStyle = Icon.DrawnSwipe(aura.swipeStyle, source)
+    self.swipeStyle = iconOptions.DrawnSwipe(aura.swipeStyle, source)
     if self.swipeStyle == "radial" then
         self:ensurePart("radial")
         if not maskRadial(self.radial, sprite) then self.swipeStyle = "linear" end
@@ -427,7 +343,7 @@ function Icon:applySwipe(aura, source, sprite)
         -- The direction is a Start flag, so a running radial must restart.
         self:stopRadial()
     end
-    self.wipeDirection = aura.wipeDirection or Icon.defaults.wipeDirection
+    self.wipeDirection = aura.wipeDirection or defaults.wipeDirection
 end
 
 --- Restyles and places the icon from its aura. A running radial keeps
@@ -443,9 +359,10 @@ function Icon:Apply(aura)
     self.isCooldown = source ~= nil and source.state == "cooldown"
     self.isBuff = source ~= nil and source.state == "active"
     -- Values in seconds (cooldowns, timed buffs, channels), which the radial
-    -- can follow.
-    if aura.source ~= self.source then
-        self.source = aura.source
+    -- can time itself; any other value's radial is drawn by hand.
+    local radialByHand = source ~= nil and not source.timed
+    if aura.source ~= self.source or radialByHand ~= self.radialByHand then
+        self.source, self.radialByHand = aura.source, radialByHand
         -- A running radial is timed to the old source's cooldown.
         self:stopRadial()
         self.radialRemaining = nil
@@ -459,13 +376,12 @@ function Icon:Apply(aura)
     self.tint = aura.iconColour or NORMAL_TINT
     self.dimWhileActive = aura.dimWhileActive ~= false
     self.desaturate = aura.desaturate == true
-    self.hideTextWhenReady = aura.hideTextWhenReady ~= false
     self.hideWhileInactive = aura.hideWhileInactive == true
     self.hideWhileActive = aura.hideWhileActive == true
     self.showActiveBelow = tonumber(aura.showActiveBelow) or 0
 
     self:setMovable(aura.unlocked)
-    self.backing.rgba = self.movable and UNLOCKED_BACKING_RGBA or aura.backgroundColour or Icon.defaults.backgroundColour
+    self.backing.rgba = self.movable and UNLOCKED_BACKING_RGBA or aura.backgroundColour or defaults.backgroundColour
 
     -- Layout changed, so redraw everything.
     self.wipeLength, self.dimmed, self.rootHidden = nil, nil, nil
@@ -479,8 +395,8 @@ end
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For the target's fields.
-function Icon:SetDetails(name, spriteID, objectID, ammo, target)
+---@param info TextInfo? For the target's fields and an ability's keybind.
+function Icon:SetDetails(name, spriteID, objectID, ammo, info)
     if spriteID ~= self.iconSpriteID or objectID ~= self.object then
         local sprite = self:showIcon(spriteID, objectID)
         -- If the square can't mask it, the radial keeps its old mask until
@@ -490,8 +406,8 @@ function Icon:SetDetails(name, spriteID, objectID, ammo, target)
         self.dimmed = nil
         self:redraw()
     end
-    if name ~= self.name or ammo ~= self.ammo or target ~= self.target then
-        self.name, self.ammo, self.target = name, ammo, target
+    if name ~= self.name or ammo ~= self.ammo or info ~= self.info then
+        self.name, self.ammo, self.info = name, ammo, info
         self:redraw()
     end
 end
@@ -502,16 +418,19 @@ end
 ---@param fillCurr number? A smoothed current value, used only for the swipe; the text always shows curr.
 ---@param stacks number? A buff's stacks, or an ability's charges ready (for $stacks/$charges; an ability with a charge left isn't dimmed).
 function Icon:SetValue(curr, max, fillCurr, stacks)
-    -- Only the linear wipe draws the smoothed value; the radial animates
-    -- itself, so for it a new fillCurr alone isn't worth a redraw.
-    local fillChanged = fillCurr ~= self.fillCurr and self.swipeStyle == "linear"
+    -- Only the linear wipe and a radial drawn by hand draw the smoothed
+    -- value; a timed radial animates itself, so for it a new fillCurr alone
+    -- isn't worth a redraw.
+    local drawsFill = self.swipeStyle == "linear" or (self.swipeStyle == "radial" and self.radialByHand)
+    local fillChanged = fillCurr ~= self.fillCurr and drawsFill
     self.fillCurr = fillCurr
     local unchanged = curr == self.curr and max == self.max and stacks == self.stacks and not fillChanged
     if unchanged then
         -- A running radial is still checked against the source once a server
         -- tick, even while the shown value stands still (e.g. a buff held up
         -- by extensions), so the swipe can't run ahead unnoticed.
-        if self.radialRunning and gameClock.ServerTicks() ~= self.radialCheckedTick then
+        local isTimedRadial = self.radialRunning and not self.radialByHand
+        if isTimedRadial and gameClock.ServerTicks() ~= self.radialCheckedTick then
             self:redraw()
         end
         return
@@ -525,6 +444,7 @@ end
 ---@param ratio number swipe value / max, 0 to 1.
 ---@return boolean active
 ---@return number wipeRatio 0 to 1.
+---@private
 function Icon:wipeFor(ratio)
     local curr = self.curr
     local isRunning = curr ~= nil and curr > 0
@@ -546,6 +466,7 @@ end
 --- the options, so it can still be moved.
 ---@param active boolean
 ---@return boolean
+---@private
 function Icon:hiddenByOptions(active)
     if not self.isBuff or self.movable then return false end
     if not active then return self.hideWhileInactive end
@@ -561,6 +482,7 @@ end
 --- the recharge.
 ---@param active boolean
 ---@return boolean
+---@private
 function Icon:isDimmed(active)
     local hasChargeLeft = self.isCooldown and self.stacks ~= nil and self.stacks > 0
     local dimmed = self.dimWhileActive and active and not hasChargeLeft
@@ -571,6 +493,7 @@ end
 --- Greys or ungreys the icon: swaps to the true greyscale copy when there is
 --- one, else darkens it. The tint applies either way.
 ---@param dimmed boolean
+---@private
 function Icon:applyDimmed(dimmed)
     local tint = self.tint
     local darkened = multiplyColours(tint, DIMMED_TINT)
@@ -587,6 +510,7 @@ function Icon:applyDimmed(dimmed)
 end
 
 --- Draws the current values: swipe, hiding, greying and texts.
+---@private
 function Icon:redraw()
     local curr, max = self.curr, self.max
     local swipeCurr = self.fillCurr or curr
@@ -602,9 +526,14 @@ function Icon:redraw()
         self:showPart(self.wipe, wipeLength > 0)
     end
 
-    -- Only a running timer gives an unrounded value; Electrified's stacks
-    -- (BuffEntry.stacksWhileUntimed) don't, and would sweep as seconds.
-    self:updateRadial(self.fillCurr, max, active)
+    if self.radialByHand then
+        -- Covers what the linear wipe would.
+        self:drawRadialByHand(wipeRatio)
+    else
+        -- Only a running timer gives an unrounded value; Electrified's stacks
+        -- (BuffEntry.stacksWhileUntimed) don't, and would sweep as seconds.
+        self:updateRadial(self.fillCurr, max, active)
+    end
     self:setHidden(self:hiddenByOptions(active))
 
     local dimmed = self:isDimmed(active)
@@ -614,14 +543,15 @@ function Icon:redraw()
     end
 
     -- Each text only reformats when its values change (see
-    -- TextNodes:SetValues); a ready cooldown or inactive buff can blank them.
-    local hasOnOff = self.isCooldown or self.isBuff
-    local showText = active or not self.hideTextWhenReady or not hasOnOff
-    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.target, showText, EMPTY_TEXT)
+    -- TextNodes:SetValues); a ready cooldown or inactive buff blanks those
+    -- set to hide then.
+    local ready = (self.isCooldown or self.isBuff) and not active
+    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.info, true, EMPTY_TEXT, ready)
 end
 
 --- Places the linear wipe against the edge its direction covers from.
 ---@param length integer How far it reaches across the icon, in pixels.
+---@private
 function Icon:placeWipe(length)
     local inset, inner = self.inset, self.innerSize
     local direction = self.wipeDirection
@@ -643,6 +573,7 @@ function Icon:placeWipe(length)
 end
 
 --- Hides the radial so the next update starts it afresh if it's needed.
+---@private
 function Icon:stopRadial()
     self.radialRunning = false
     if self.radial ~= nil then self.radial.hidden = true end
@@ -665,6 +596,7 @@ end
 ---@param remaining number Seconds left.
 ---@param total number? The timer's length.
 ---@param flags integer Start flags.
+---@private
 function Icon:startRadial(remaining, total, flags)
     if total == nil or total < remaining then total = remaining end
     self.radial:Start(0, total, flags)
@@ -691,6 +623,7 @@ end
 ---@param jumpedUp boolean
 ---@param isNewTick boolean
 ---@return boolean
+---@private
 function Icon:radialNeedsRestart(remaining, total, jumpedUp, isNewTick)
     if jumpedUp then return true end
     -- radialPartial is nil until a partway start has been tried; a drift
@@ -707,6 +640,7 @@ end
 ---@param remaining number? Seconds left, unrounded; nil when no timer is running.
 ---@param total number?
 ---@param active boolean
+---@private
 function Icon:updateRadial(remaining, total, active)
     if self.swipeStyle ~= "radial" or self.radial == nil or not active or remaining == nil then
         if self.radialRunning then
@@ -736,6 +670,26 @@ function Icon:updateRadial(remaining, total, active)
     self:startRadial(remaining, total, flags)
     self.radialRunning = true
     self:showPart(self.radial, true)
+end
+
+--- Draws the radial by hand over part of the icon, for a value that isn't
+--- seconds (see RADIAL_BY_HAND_END). It's started once, and again only
+--- when its direction changes, as that's a Start flag.
+---@param coverRatio number How much of the icon it covers, 0 to 1.
+---@private
+function Icon:drawRadialByHand(coverRatio)
+    if self.swipeStyle ~= "radial" or self.radial == nil then
+        if self.radialRunning then self:stopRadial() end
+        return
+    end
+    local flags = self.swipeAnticlockwise and RADIAL_FLIP_HORIZONTAL or 0
+    if not self.radialRunning or flags ~= self.radialByHandFlags then
+        self.radial:Start(0, RADIAL_BY_HAND_END, flags)
+        self.radialByHandFlags = flags
+        self.radialRunning = true
+    end
+    self.radial.curValue = (1 - coverRatio) * RADIAL_BY_HAND_END
+    self:showPart(self.radial, coverRatio > 0)
 end
 
 --- Destroys the icon and everything in it.

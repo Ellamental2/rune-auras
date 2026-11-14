@@ -65,9 +65,12 @@ local FIELDS = {
     textColour = "string", textFont = "string", textSize = "number", textTemplate = "string",
     limitDecimals = "boolean", decimalsBelow = "number", percentDecimals = "number",
     conditions = "table", texts = "table", load = "table", sourceOptions = "table",
+    -- An Icon's, from before each text node had its own: loading gives its
+    -- nodes it (see auraTexts.MoveHideWhenReady).
+    hideTextWhenReady = "boolean",
 }
 for _, displayType in ipairs(displayTypes.List()) do
-    for key, default in pairs(displayType.module.defaults or {}) do
+    for key, default in pairs(displayType.options.defaults or {}) do
         if FIELDS[key] == nil then FIELDS[key] = isColourKey(key) and "string" or type(default) end
     end
 end
@@ -76,7 +79,7 @@ end
 local TEXT_FIELDS = {
     key = "number", showText = "boolean", textTemplate = "string", textColour = "string",
     textFont = "string", textSize = "number", limitDecimals = "boolean", decimalsBelow = "number",
-    percentDecimals = "number", anchor = "string", x = "number", y = "number",
+    percentDecimals = "number", anchor = "string", x = "number", y = "number", hideWhenReady = "boolean",
 }
 
 -- Field names and their short codes in exports: a name's code is its place
@@ -96,6 +99,7 @@ local KEYS = {
     "value", "sourceType", "property", "text", "options", "records", "version",
     "swipeAnticlockwise", "showProgressText", "fillStyle", "fillAnticlockwise", "wipeDirection",
     "sourceOptions", "hideWithoutSpecial", "rememberSpecial", "durationSeconds", "percentDecimals",
+    "hideWhenReady",
 }
 local LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 -- Field name to its code, and code to its name.
@@ -221,7 +225,9 @@ local function cleanCheck(value)
         sourceType = cleanValue(value.sourceType, "string"),
     }
     local checkValue = value.value
-    if type(checkValue) == "boolean" or cleanValue(checkValue, "number") ~= nil then result.value = checkValue end
+    if type(checkValue) == "boolean" or conditions.IsUsableValue(checkValue) or cleanValue(checkValue, "number") ~= nil then
+        result.value = checkValue
+    end
     return result
 end
 

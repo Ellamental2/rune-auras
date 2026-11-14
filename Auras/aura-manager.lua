@@ -9,8 +9,22 @@ local dataSources = require("Auras/Registries/data-sources")
 local displayTypes = require("Auras/Registries/display-types")
 local gameApi = require("GameData/game-api")
 local gameClock = require("GameData/Trackers/game-clock")
+local textTemplate = require("Auras/Helpers/text-template")
 
 local auraManager = {}
+
+-- Each display type's drawing code, which only the manager uses (the
+-- registry holds the types' options). A type missing here isn't drawn.
+---@type table<DisplayID, { new: fun(parent: userdata, aura: Aura, groupPoint: GroupPoint?): Display }>
+local DISPLAYS = {
+    bar = require("Auras/Displays/bar"),
+    icon = require("Auras/Displays/icon"),
+    text = require("Auras/Displays/text"),
+    segments = require("Auras/Displays/segments"),
+    orb = require("Auras/Displays/orb"),
+    group = require("Auras/Displays/group"),
+    dynamicGroup = require("Auras/Displays/dynamic-group"),
+}
 
 --- A mounted aura.
 ---@class MountedEntry
@@ -22,6 +36,7 @@ local auraManager = {}
 ---@field conditionMask integer Which of its conditions passed when it was last applied (see conditions.Mask).
 ---@field conditionsEveryLogicTick boolean Whether its conditions read a value extrapolated between server ticks.
 ---@field conditionsTick integer? The server or Logic tick its conditions were last tested on; nil to test next frame.
+---@field showsKeybind boolean? Whether its text shows $keybind, as its conditions last changed it (see sourceKeybind).
 
 --- A mounted dynamic group and its contents, in list order.
 ---@class DynamicGroupEntry
@@ -41,7 +56,9 @@ local auraManager = {}
 ---@field icon integer?
 ---@field object integer?
 ---@field ammo string? The quiver's ammo, for $ammo.
----@field target TargetInfo? The target's details, for a target source's $target, $level, $hitChance and $weakness.
+---@field info TextInfo? Its text details (see dataSources.Details): a target source's $target, $level, $hitChance and $weakness.
+---@field keybindStep integer? The step the keybind was read in (see sourceKeybind).
+---@field keybind TextInfo? The ability's keybind for $keybind, as a TextInfo that's replaced only when it changes.
 
 ---@type table<integer, MountedEntry>
 local mounted = {}
@@ -163,11 +180,24 @@ local function applyDisplay(display, aura)
     display:Apply(aura)
 end
 
+--- Whether an aura's text shows a field: its own text, or a text node's.
+---@param aura Aura As its conditions change it.
+---@param field TextFieldID
+---@return boolean
+local function showsField(aura, field)
+    if textTemplate.Uses(aura.textTemplate, field) then return true end
+    for _, node in ipairs(aura.texts or {}) do
+        if textTemplate.Uses(node.textTemplate, field) then return true end
+    end
+    return false
+end
+
 --- Applies an aura to its display as its passing conditions change it,
 --- including whether they hide it.
 ---@param entry MountedEntry
 local function applyEntry(entry)
     local aura, hidden = conditions.Apply(entry.aura, entry.conditionMask)
+    entry.showsKeybind = showsField(aura, "keybind")
     -- Applying can make parts (texts, ticks), so it can hit the limit.
     local ok, problem = pcall(applyDisplay, entry.display, aura)
     if not ok then reportDrawFailure(problem) end
@@ -283,18 +313,20 @@ end
 ---@param parent userdata The layer to make it in.
 ---@param point GroupPoint? Its group's point; nil at the top level.
 local function mount(aura, parent, point)
-    local displayType = displayTypes.Get(aura.display)
-    if displayType == nil then return end
+    local displayModule = DISPLAYS[aura.display]
+    if displayModule == nil then return end
     madeThisFrame = true
-    local ok, display = pcall(displayType.module.new, parent, aura, point)
+    local ok, display = pcall(displayModule.new, parent, aura, point)
     if not ok or display == nil then
         reportDrawFailure(display)
         return
     end
     local auraID = aura.id
     display:SetOnMoved(function(x, y) onDisplayMoved(auraID, x, y) end)
+    -- No condition passes yet, so the aura as it's stored decides whether
+    -- its text shows $keybind (applyEntry updates it as conditions change).
     mounted[auraID] = { display = display, displayID = aura.display, aura = aura, parent = parent,
-        version = auraStore.Version(auraID), conditionMask = 0 }
+        version = auraStore.Version(auraID), conditionMask = 0, showsKeybind = showsField(aura, "keybind") }
     scheduleConditions(mounted[auraID])
 end
 
@@ -338,6 +370,10 @@ end
 
 ---@type table<integer, boolean> Aura id to false while its load options (or SourceOptions.hideWithoutSpecial) keep it from loading; worked out each Logic tick by updateLoaded, which resyncs when one changes.
 local loadedStates = {}
+---@type Aura[] The auras that can be kept from loading: enabled, locked, with load options or "hide without special". Every other aura loads.
+local loadCandidates = {}
+-- Whether loadCandidates needs working out again: the store changed.
+local loadCandidatesStale = true
 
 --- Whether an aura is loaded. One that isn't isn't mounted, so a dynamic
 --- group closes up around it.
@@ -483,6 +519,7 @@ local loadTimings = {}
 ---@param isAffected (fun(sourceID: string): boolean)? Whether a source changed; nil for all of them.
 function auraManager.Refresh(isAffected)
     dirty = true
+    loadCandidatesStale = true
     if isAffected == nil then
         applyAll = true
         loadTimings = {}
@@ -499,6 +536,7 @@ end
 --- Syncs on the next frame, re-applying only auras whose store version moved.
 function auraManager.RefreshChanged()
     dirty = true
+    loadCandidatesStale = true
 end
 
 --- The on-screen size of an aura's display. A Text display sizes itself to
@@ -512,6 +550,10 @@ function auraManager.DisplaySize(auraID)
     return entry.display.width, entry.display.height
 end
 
+--- An aura's size on screen, as auraManager.ScreenSize gives it. The UI is
+--- handed this (see main.lua) rather than requiring the manager.
+---@alias ScreenSizeFunction fun(aura: Aura): number, number
+
 --- An aura's size on screen: its width/height, or for a display that sizes
 --- itself (Text), the size it has now.
 ---@param aura Aura
@@ -519,7 +561,7 @@ end
 ---@return number height
 function auraManager.ScreenSize(aura)
     local displayType = displayTypes.Get(aura.display)
-    if displayType ~= nil and displayType.module.sizesItself then
+    if displayType ~= nil and displayType.options.sizesItself then
         local width, height = auraManager.DisplaySize(aura.id)
         if width ~= nil then return width, height end
     end
@@ -577,9 +619,25 @@ local function sourceValue(sourceID, withDetails)
         value.detailsStep = step
         -- Name and icon don't need a player: an unlocked bar still shows
         -- its icon at the login screen.
-        value.name, value.icon, value.object, value.ammo, value.target = dataSources.Details(sourceID)
+        value.name, value.icon, value.object, value.ammo, value.info = dataSources.Details(sourceID)
     end
     return value
+end
+
+--- A source's keybind for $keybind, read once a step and only for auras
+--- whose text shows it, as reading it reads the action bars. Kept as a
+--- TextInfo replaced only when the keybind changes, so a display notices
+--- the change without a table made every step.
+---@param sourceID string
+---@param value SourceValue Its values this step.
+---@return TextInfo
+local function sourceKeybind(sourceID, value)
+    if value.keybindStep ~= step then
+        value.keybindStep = step
+        local keybind = dataSources.Keybind(sourceID)
+        if value.keybind == nil or value.keybind.keybind ~= keybind then value.keybind = { keybind = keybind } end
+    end
+    return value.keybind
 end
 
 --- What a condition's check reads (see ReadCheckValues).
@@ -591,6 +649,10 @@ local function readForConditions(sourceID)
     local value = sourceValue(sourceID, VALUES_ONLY)
     return value.curr, value.max, value.stacks
 end
+
+--- Whether a check's ability is usable now (see ReadUsable).
+---@type ReadUsable
+local readUsable = dataSources.Usable
 
 --- Whether an aura loads this step. Each is tested once a server tick (its
 --- options are game vars too), or every Logic tick if a load check reads an
@@ -610,23 +672,40 @@ local function testLoaded(aura)
     local now = timing.everyLogicTick and logicTick or serverTick
     if now ~= nil and timing.tick == now then return loadedStates[aura.id] ~= false end
     timing.tick = now
-    return loadOptions.Passes(aura, readSourceID(aura), readForConditions)
+    return loadOptions.Passes(aura, readSourceID(aura), readForConditions, readUsable)
+end
+
+--- Works out loadCandidates from the store, and lets an aura that's no
+--- longer one load (its load options were removed, it was unlocked).
+local function findLoadCandidates()
+    loadCandidatesStale = false
+    loadCandidates = {}
+    for _, aura in ipairs(auraStore.List()) do
+        local hidesWithoutSpecial = aura.source == dataSources.EQUIPPED_SPECIAL_ID
+            and hasSourceOption(aura, "hideWithoutSpecial")
+        local canUnload = aura.enabled and not aura.unlocked and (hidesWithoutSpecial or loadOptions.HasAny(aura))
+        if canUnload then
+            loadCandidates[#loadCandidates + 1] = aura
+        elseif loadedStates[aura.id] == false then
+            loadedStates[aura.id] = nil
+            dirty = true
+        end
+    end
 end
 
 --- Works out which auras load, resyncing if any changed. Draw calls it once
---- a Logic tick, as nothing it tests moves faster. An unlocked aura always
---- loads, so it can be found and moved. A disabled one isn't mounted anyway,
---- so it isn't tested.
+--- a Logic tick, as nothing it tests moves faster. Only loadCandidates are
+--- tested: an unlocked aura always loads, so it can be found and moved, and
+--- a disabled one isn't mounted anyway.
 local function updateLoaded()
+    if loadCandidatesStale then findLoadCandidates() end
     loadOptions.NewStep()
-    for _, aura in ipairs(auraStore.List()) do
+    for _, aura in ipairs(loadCandidates) do
         local loaded = true
-        if aura.enabled and not aura.unlocked then
-            if isHiddenWithoutSpecial(aura) then
-                loaded = false
-            elseif loadOptions.HasAny(aura) then
-                loaded = testLoaded(aura)
-            end
+        if isHiddenWithoutSpecial(aura) then
+            loaded = false
+        elseif loadOptions.HasAny(aura) then
+            loaded = testLoaded(aura)
         end
         local wasLoaded = loadedStates[aura.id] ~= false
         if loaded ~= wasLoaded then dirty = true end
@@ -643,7 +722,7 @@ local function updateConditions(entry)
     local now = entry.conditionsEveryLogicTick and logicTick or serverTick
     if now ~= nil and entry.conditionsTick == now then return end
     entry.conditionsTick = now
-    local mask = conditions.Mask(auraConditions, readSourceID(entry.aura), readForConditions)
+    local mask = conditions.Mask(auraConditions, readSourceID(entry.aura), readForConditions, readUsable)
     if mask ~= entry.conditionMask then
         entry.conditionMask = mask
         applyEntry(entry)
@@ -656,18 +735,20 @@ end
 local function drawEntry(entry)
     local sourceID = readSourceID(entry.aura)
     local curr, max, unrounded, stacks = nil, nil, nil, nil
-    local name, icon, object, ammo, target = nil, nil, nil, nil, nil
+    local name, icon, object, ammo, info = nil, nil, nil, nil, nil
     if sourceID ~= nil then
         local value = sourceValue(sourceID, WITH_DETAILS)
         curr, max, unrounded, stacks = value.curr, value.max, value.unrounded, value.stacks
-        name, icon, object, ammo, target = value.name, value.icon, value.object, value.ammo, value.target
+        name, icon, object, ammo, info = value.name, value.icon, value.object, value.ammo, value.info
+        -- An ability has no other text details, so its keybind takes their place.
+        if entry.showsKeybind and info == nil then info = sourceKeybind(sourceID, value) end
     end
     updateConditions(entry)
     -- A smooth source's unrounded value is only for drawing; text keeps the
     -- rounded one. Each display decides whether to use it.
     local display = entry.display
     if display.SetDetails ~= nil then
-        local ok, problem = pcall(display.SetDetails, display, name, icon, object, ammo, target)
+        local ok, problem = pcall(display.SetDetails, display, name, icon, object, ammo, info)
         if not ok then reportDrawFailure(problem) end
     end
     local ok, problem = pcall(display.SetValue, display, curr, max, unrounded, stacks)
@@ -680,7 +761,8 @@ local function drawEntry(entry)
 end
 
 --- Keeps the displays in step with the game area's size: anchored positions
---- depend on it. Old saves' group positions convert once it's known.
+--- depend on it. Old saves' group positions convert once it's known. Draw
+--- checks once a Logic tick (a resize shows within 20 ms), not every frame.
 local function followGameAreaSize()
     if gameArea.width == gameAreaWidth and gameArea.height == gameAreaHeight then return end
     gameAreaWidth, gameAreaHeight = gameArea.width, gameArea.height
@@ -705,7 +787,6 @@ function auraManager.Draw()
         end
     end
     if gameArea == nil then return end
-    followGameAreaSize()
 
     -- Shared state is looked up once a step, and auras sharing a data
     -- source (or checking it in a condition or load check) read it once.
@@ -713,6 +794,7 @@ function auraManager.Draw()
     if logicTick == nil or logicTick ~= stepLogicTick then
         stepLogicTick = logicTick
         step = step + 1
+        followGameAreaSize()
         playerAvailable = gameApi.PlayerAvailable()
         updateLoaded()
     end
@@ -743,6 +825,7 @@ function auraManager.Destroy()
     destroyAll()
     gameArea = nil
     dirty = true
+    loadCandidatesStale = true
 end
 
 return auraManager
