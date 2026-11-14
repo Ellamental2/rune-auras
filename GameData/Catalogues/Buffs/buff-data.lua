@@ -54,6 +54,8 @@ buffData.NAMES = {
     COMBATV2_CHARGE_OVERRIDE_BUFF_DUMMY_ABILITY = "Greater Barge",
     DIVINATION_PORTER_ACTIVE = "Sign of the Porter",
     FMC_REWARD_BOOK_ACTIVE = "Book of Char",
+    -- The game renamed it; its struct keeps the old name, Artificer's Measure.
+    SKILLING_OFFHAND_MEASURE_DUMMY_ABILITY = "Artificer's Focus",
     COMBATV2_STUN_IMMUNE_ACTIVE = "Stun immunity",
     COMBATV2_MOLE2_MUDSTUN_DUMMY_ABILITY = "Trapped in mud (Giant Mole)",
     COMBATV2_NEX2_RAGE_DEBUFF = "Rage (Nex: Angel of Death)",
@@ -232,6 +234,9 @@ buffData.END_VAR_FAMILIES = {
 ---@type table<string, BuffStacksData>
 buffData.STACKS = {
     COMBATV2_BUFF_ANIMATE_DEAD = { var = "COMBATV2_MAGIC_ANIMATE_DEAD_STACKS" },
+    -- Fungal Shield's shield left, which the buff bar shows under its icon.
+    -- TODO: check it in game, and that it's the same number the bar shows.
+    COMBATV2_BUFF_EGWD_BIK_MAGIC_ARMOUR_SHIELD = { var = "EGWD_BIK_MAGIC_ARMOUR_SHIELD" },
     -- The damage dealt towards the Aftershock perk's next explosion, which
     -- comes at 50,000.
     COMBATV2_AFTERSHOCK_TRACKER = { var = "INVENT_PERK_AFTERSHOCK_COUNTER", atFull = 50000 },
@@ -301,6 +306,29 @@ buffData.ACTIVE_VARS = {
     -- TODO: check these in game.
     COMBATV2_EGWD_ZAMORAK_BOSS_RUNE_OFFENSIVE_ZONE_BUFF = "EGWD_ZAMORAK_BOSS_RUNE_OFFENSIVE_ZONE_ACTIVE",
     COMBATV2_EGWD_ZAMORAK_BOSS_RUNE_DEFENSIVE_ZONE_BUFF = "EGWD_ZAMORAK_BOSS_RUNE_DEFENSIVE_ZONE_ACTIVE",
+}
+
+-- Struct name to the VarClient holding the Logic tick its ability was last
+-- used, for a toggled buff that lasts a whole number of server ticks from
+-- then but has no end time, and whose length varies (Debilitate's with the
+-- shield worn): it's timed from the use, its length found from the buff
+-- bar's timer (see measureBarTimer in active-buffs).
+buffData.BAR_TIMED = {
+    COMBATV2_ABILITY_DEFENCE_DEBILITATE = "COMBATV2_COOLDOWN_DEFENCE_DEBILITATE_START_CLIENT",
+}
+
+-- Struct name to the worn slot whose item is its icon, for a buff the game
+-- shows as whatever is worn there (the scripture is the god book in the
+-- pocket slot), and the config names of the items that can be its icon
+-- before it's first switched on.
+---@type table<string, BuffWornIcon>
+buffData.WORN_ICONS = {
+    COMBATV2_GOD_BOOK_TIMER_DUMMY_ABILITY = {
+        slot = "POCKET",
+        -- The gods' books, illuminated or not (SARADOMINBOOK_COMPLETE), the
+        -- elder gods' (EGWD_JAS_BOOK) and Amascut's (RAID_REBIRTH1_AMASCUT_BOOK).
+        itemNames = { "BOOK_COMPLETE$", "^EGWD_%u+_BOOK$", "_AMASCUT_BOOK$" },
+    },
 }
 
 -- Struct name to a VarPlayer that must also be non-zero for it to count as

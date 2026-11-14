@@ -12,6 +12,11 @@ local gameApi = require("GameData/game-api")
 local buffs = {}
 
 local BUFF_COLOUR = 0x27AE60FF
+-- A toggled buff's value can be the count the buff bar shows under its icon
+-- (see measureToggle in GameData/Trackers/active-buffs), which text writes
+-- as the bar does.
+---@type TextInfo
+local COMPACT_VALUES = { compactValues = true }
 -- Also the target debuff sources' colour.
 buffs.DEBUFF_COLOUR = 0xE74C3CFF
 local COOLDOWN_ID_PREFIX = abilityCatalogue.SOURCE_ID_PREFIX
@@ -52,6 +57,24 @@ local function ammoName(itemID)
     return name
 end
 
+--- The details of a buff whose icon is an item that changes while it runs:
+--- the quiver's ammo (see BuffEntry.objectVar), also named for $ammo, or
+--- the item worn in a slot for it (see activeBuffs.WornIcon).
+---@param entry BuffEntry
+---@return (fun(): string?, integer?, integer?, string?)?
+local function itemDetails(entry)
+    if entry.objectVar ~= nil then
+        return function()
+            local item = activeBuffs.Object(entry)
+            return entry.name, nil, item or entry.object, ammoName(item)
+        end
+    end
+    if entry.wornIcon == nil then return nil end
+    return function()
+        return entry.name, nil, activeBuffs.WornIcon(entry) or entry.object, nil
+    end
+end
+
 --- Builds a buff or debuff source per listed catalogue entry (see
 --- buffCatalogue.IsListed).
 ---@param cooldownSources DataSource[] The ability cooldowns, for buffs that show their ability's greater icon.
@@ -68,7 +91,8 @@ function buffs.Build(cooldownSources)
             local ability = greaterAbility(entry, cooldownsByID)
             -- Timed (so it can move every frame) unless all it has is stacks
             -- or an on/off var.
-            local timed = entry.endVar ~= nil or entry.startVar ~= nil
+            local timed = entry.endVar ~= nil or entry.startVar ~= nil or entry.barCastVar ~= nil
+            local onOff = not timed and entry.stacksVar == nil
             list[#list + 1] = {
                 -- A debuff's id is "buff_<struct name>" too, as the catalogue names it.
                 id = entry.id,
@@ -84,19 +108,15 @@ function buffs.Build(cooldownSources)
                 ability = ability,
                 smooth = timed,
                 timed = timed,
-                onOff = not timed and entry.stacksVar == nil,
+                onOff = onOff,
+                textInfo = onOff and COMPACT_VALUES or nil,
                 hasStacks = entry.stacksVar ~= nil,
                 hasAmmo = entry.objectVar ~= nil,
                 state = "active",
                 -- Its duplicates' ids (see dropDuplicates in Buffs/buff-list).
                 movedFrom = entry.duplicateIDs,
                 read = function() return activeBuffs.Read(entry) end,
-                -- The quiver's icon is its ammo (see BuffEntry.objectVar), and
-                -- $ammo its name.
-                details = entry.objectVar ~= nil and function()
-                    local item = activeBuffs.Object(entry)
-                    return entry.name, nil, item or entry.object, ammoName(item)
-                end or nil,
+                details = itemDetails(entry),
             }
         end
     end

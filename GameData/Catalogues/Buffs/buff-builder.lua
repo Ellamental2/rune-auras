@@ -42,11 +42,18 @@ local buffBuilder = {}
 ---@field quietTicks integer? For a buff that comes once the player stops attacking, the server ticks it takes (see buff-data's QUIET_TICKS).
 ---@field startVar string? Its ability's _START VarPlayer, for a buff timed from the cast (see buff-vars' START_VAR_NAMES).
 ---@field activeVar string? VarPlayer that's on while a toggled buff is (see buff-vars' ACTIVE_VAR_NAMES).
+---@field barCastVar string? For a toggled buff timed by the buff bar, the VarClient holding the Logic tick its ability was used (see buff-data's BAR_TIMED).
 ---@field objectOverride boolean Whether its icon is an item the game picks while it runs (COMBATV2_BUFF_OBJ_OVERRIDE: the quiver's ammo).
 ---@field iconSwapped boolean Whether the game swaps its icon by script while it runs (COMBATV2_BUFF_ICON_OVERRIDE: Bloodlust, Perfect Equilibrium), so the buff bar can show a sprite other than its own.
 ---@field objectVar string? For such a buff, the OBJ VarPlayer holding that item: its active var.
+---@field wornIcon BuffWornIcon? Where its icon comes from, for a buff the game shows as an item worn (see buff-data's WORN_ICONS).
 ---@field baseStruct string? For a greater ability's buff, its base buff's struct (see shareAbilityVars).
 ---@field duplicateIDs string[]? Ids of duplicates dropped in its favour (see dropDuplicates).
+
+--- The worn item a buff shows as its icon (see activeBuffs.WornIcon).
+---@class BuffWornIcon
+---@field slot string The slot, a wornEquipment.SLOTS key.
+---@field itemNames string[] Patterns for the config names of the items it can be: one worn while the buff is off counts only if its name matches.
 
 local SOURCE_ID_PREFIX = "buff_"
 -- How the struct names of buffs a boss gains itself start.
@@ -201,6 +208,7 @@ function buffBuilder.Read(structID)
         stacksPercent = readParam(struct, params.stacksPercent) == true,
         objectOverride = readParam(struct, params.objectOverride) == true,
         iconSwapped = readParam(struct, params.iconSwapped) == true,
+        wornIcon = buffData.WORN_ICONS[structName],
         duration = type(durationTicks) == "number" and durationTicks > 0 and gameClock.TicksToSeconds(durationTicks) or nil,
         ability = abilityCatalogue.Key(details.abilityID, details.skill),
     }

@@ -148,7 +148,7 @@ end
 
 --- Finds every var a buff is read from, setting its endVar, stacksVar,
 --- stacksAtFull, stacksWhileUntimed, requiredVar, quietTicks, iconGroup,
---- startVar, activeVar and objectVar. Toggles and start-timed buffs are only
+--- startVar, activeVar, barCastVar and objectVar. Toggles and start-timed buffs are only
 --- looked for without an end time, which is looked for first.
 ---@param entry BuffEntry Changed in place; its structName, stacks, stacksPercent, duration and objectOverride must be set.
 function buffVars.Resolve(entry)
@@ -172,6 +172,8 @@ function buffVars.Resolve(entry)
     entry.activeVar = untimed and findVar(activeAlias, {}, ACTIVE_VAR_NAMES, tokens, gameApi.VarExists) or nil
     -- The quiver's on/off var is the OBJ var holding its ammo.
     entry.objectVar = entry.objectOverride and entry.activeVar or nil
+    local barCast = buffData.BAR_TIMED[structName]
+    entry.barCastVar = entry.activeVar ~= nil and barCast ~= nil and isEndTimeVar(barCast) and barCast or nil
 end
 
 --- Whether a buff has any var to be read from (active-buffs reads it if so).

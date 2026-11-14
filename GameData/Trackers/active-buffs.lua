@@ -4,7 +4,10 @@
 -- running, and its values), then whether a running buff counts as active
 -- (its required var, and the bar for a buff the bar decides). A buff seen
 -- starting counts as active for a grace, as both can lag its vars. Owns
--- timing each buff and following its max as it's extended or refreshed.
+-- timing each buff and following its max as it's extended or refreshed,
+-- what the bar adds where vars fall short (a toggled buff's count, a
+-- bar-timed buff's length), and the item a buff shows from a worn slot,
+-- remembered between sessions.
 
 local gameApi = require("GameData/game-api")
 local gameClock = require("GameData/Trackers/game-clock")
@@ -12,6 +15,7 @@ local abilityCooldowns = require("GameData/Trackers/ability-cooldowns")
 local buffCatalogue = require("GameData/Catalogues/buff-catalogue")
 local varCache = require("GameData/Trackers/var-cache")
 local buffBar = require("GameData/Trackers/buff-bar")
+local wornEquipment = require("GameData/Trackers/worn-equipment")
 
 local activeBuffs = {}
 
@@ -45,6 +49,10 @@ local NO_TARGET = -1
 local ON, TOGGLE_MAX = 1, 1
 -- The most a buff shown as a percentage reads.
 local FULL_PERCENT = 100
+-- How far behind the buff bar's timer can be when it's read: the bar
+-- redraws every 10 Logic ticks, and is read at most every 10 (see buff-bar).
+local BAR_LAG_TICKS = 20
+local LOGIC_TICKS_PER_SERVER_TICK = gameClock.LOGIC_TICKS_PER_SERVER_TICK
 -- What a buff without other sprites on the bar has (see BuffEntry.barIcons).
 local NO_ICONS = {}
 -- A shared-icon group's match before it has had one.
@@ -59,6 +67,7 @@ local NONE_KEPT = {}
 ---@field key any What started it: a timer's end tick (see followKey), a start-timed buff's start tick, else true.
 ---@field max number? A timer's full length, grown by extensions.
 ---@field graceUntil integer? The Logic tick it counts as active until (see GRACE_TICKS); nil when it was found already running.
+---@field counted boolean? Whether it counted as active at its last read (see counts).
 
 --- A buff's last Read, and the Logic tick it was read on.
 ---@class BuffReading
@@ -74,6 +83,29 @@ local runs = {}
 local readings = {}
 ---@type table<integer, integer> Struct id to the most stacks seen this session.
 local maxStacks = {}
+---@type table<integer, number> Struct id to the most a toggled buff's bar count has shown this session.
+local maxCounts = {}
+
+--- What's been worked out about a bar-timed buff's latest use (see
+--- measureBarTimer).
+---@class BarTiming
+---@field castTick integer The Logic tick it was used.
+---@field seconds integer? The bar's timer at the last read.
+---@field endTick integer? The Logic tick it ends on, once known or guessed.
+---@field settled boolean? Whether endTick is exact: it came from the timer stepping down.
+
+---@type table<integer, BarTiming> Struct id to its bar-timed buff's latest use.
+local barTimings = {}
+---@type table<integer, integer> Struct id to its bar-timed buff's last length, in server ticks, for a use the bar doesn't show yet.
+local barLengths = {}
+
+-- Where the items remembered for buffs' worn-slot icons are saved, as
+-- "STRUCT_NAME=itemID" pairs joined by commas.
+local WORN_ICONS_STORAGE_KEY = "buffWornIcons"
+---@type table<string, integer>? Struct name to the item last taken from its icon's slot (see WornIcon); loaded on first use.
+local wornIcons = nil
+---@type table<integer, string|false> Item id to its config name, false where it can't be read, as names don't change.
+local itemConfigNames = {}
 ---@type table<string, table<integer, boolean>> BuffIconGroup.key to the members its last match of bar slots kept (see isShownInGroup).
 local groupMatches = {}
 
@@ -169,24 +201,105 @@ local function measureStacks(_, _, _, stacks, most)
     return true, stacks, most, nil, true
 end
 
---- A toggled buff (no timer: Bone Shield, prayers): its var is a number
---- other than 0 or NO_TARGET while it's on (an OBJ var, the quiver's, gives
---- an item). One the bar decides (the porter) follows the bar both ways
---- while it can be read, as its var can be wrong (the porter's isn't set
---- again on login).
+--- Whether a toggled buff is on: its var is a number other than 0 or
+--- NO_TARGET (an OBJ var, the quiver's, gives an item). One the bar decides
+--- (the porter) follows the bar both ways while it can be read, as its var
+--- can be wrong (the porter's isn't set again on login).
+---@param entry BuffEntry
+---@return boolean
+local function isToggledOn(entry)
+    local shown = entry.endsOffBuffBar and buffBar.ShownSeconds(entry.icon, entry.object) or nil
+    if shown ~= nil then return #shown > 0 end
+    local raw = varPlayerValue(entry.activeVar)
+    local value = tonumber(raw) or gameApi.ItemID(raw)
+    return value ~= nil and value ~= 0 and value ~= NO_TARGET
+end
+
+--- The count the buff bar shows under a toggled buff (see
+--- buffBar.ShownCount), by its own icon or another the bar shows for it.
+---@param entry BuffEntry
+---@return number? count nil when the bar shows none.
+local function barCount(entry)
+    local count = buffBar.ShownCount(entry.icon, entry.object)
+    for _, icon in ipairs(entry.barIcons or NO_ICONS) do
+        if count ~= nil then break end
+        count = buffBar.ShownCount(icon)
+    end
+    return count
+end
+
+--- A toggled buff (no timer: Bone Shield, prayers), on as isToggledOn
+--- says. While on, its value is the count the bar shows under its icon
+--- (Bone Shield's level, the porter's charges), over the most shown this
+--- session, else 1 of 1.
 ---@param entry BuffEntry
 local function measureToggle(entry)
-    local shown = entry.endsOffBuffBar and buffBar.ShownSeconds(entry.icon, entry.object) or nil
-    local on
-    if shown ~= nil then
-        on = #shown > 0
-    else
-        local raw = varPlayerValue(entry.activeVar)
-        local value = tonumber(raw) or gameApi.ItemID(raw)
-        on = value ~= nil and value ~= 0 and value ~= NO_TARGET
+    local most = maxCounts[entry.structID] or TOGGLE_MAX
+    if not isToggledOn(entry) then return false, 0, most end
+    local count = barCount(entry)
+    if count == nil then return true, ON, most, nil, true end
+    most = math.max(most, count)
+    maxCounts[entry.structID] = most
+    return true, count, most, nil, true
+end
+
+--- The Logic tick a buff timed from its use ends on: a whole number of
+--- server ticks after the use, the nearest to an estimate.
+---@param castTick integer
+---@param estimate number
+---@return integer endTick
+local function endOnServerTick(castTick, estimate)
+    local serverTicks = math.max(1, math.floor((estimate - castTick) / LOGIC_TICKS_PER_SERVER_TICK + 0.5))
+    return castTick + serverTicks * LOGIC_TICKS_PER_SERVER_TICK
+end
+
+--- Works out when a bar-timed buff ends from the bar's timer, which shows
+--- the seconds left rounded up and is up to BAR_LAG_TICKS late. Its first
+--- reading puts the end within a second, so it's a guess until the timer
+--- steps down: the step was at most BAR_LAG_TICKS ago, which narrows the
+--- end to less than a server tick, so it's exact from then.
+---@param entry BuffEntry
+---@param timing BarTiming Changed in place.
+---@param now integer Logic tick.
+local function followBarTimer(entry, timing, now)
+    local shown = buffBar.ShownSeconds(entry.icon, entry.object)
+    local seconds = shown and shown[1]
+    if type(seconds) ~= "number" or seconds == timing.seconds or timing.settled then return end
+    -- A bigger drop means reads were missed, so when it stepped isn't known.
+    local steppedDown = timing.seconds ~= nil and seconds == timing.seconds - 1
+    timing.seconds = seconds
+    local shownEnd = now + seconds * LOGIC_TICKS_PER_SECOND
+    -- Stepped down: it ends `seconds` after a step up to BAR_LAG_TICKS ago.
+    -- Else it ends within the second (and the lag) before `seconds` from now.
+    local slack = steppedDown and BAR_LAG_TICKS or LOGIC_TICKS_PER_SECOND + BAR_LAG_TICKS
+    timing.endTick = endOnServerTick(timing.castTick, shownEnd - slack / 2)
+    timing.settled = steppedDown
+    barLengths[entry.structID] = (timing.endTick - timing.castTick) // LOGIC_TICKS_PER_SERVER_TICK
+end
+
+--- A toggled buff timed by the buff bar (Debilitate, see BuffEntry.barCastVar):
+--- on as isToggledOn says, timed from its ability's use, ending as
+--- followBarTimer works out. Until the bar shows this use, it takes the
+--- last use's length, and without one reads 1 of 1.
+---@param entry BuffEntry
+---@param now integer Logic tick.
+local function measureBarTimer(entry, now)
+    if not isToggledOn(entry) then return false, 0, 0 end
+    local castTick = endTickOf(entry.barCastVar)
+    if castTick == nil then return true, ON, TOGGLE_MAX, nil, true end
+    local id = entry.structID
+    local timing = barTimings[id]
+    if timing == nil or timing.castTick ~= castTick then
+        timing = { castTick = castTick }
+        local length = barLengths[id]
+        if length ~= nil then timing.endTick = castTick + length * LOGIC_TICKS_PER_SERVER_TICK end
+        barTimings[id] = timing
     end
-    if not on then return false, 0, TOGGLE_MAX end
-    return true, ON, TOGGLE_MAX, nil, true
+    followBarTimer(entry, timing, now)
+    if timing.endTick == nil then return true, ON, TOGGLE_MAX, nil, castTick end
+    local remaining = math.max(0, (timing.endTick - now) / LOGIC_TICKS_PER_SECOND)
+    local length = (timing.endTick - castTick) / LOGIC_TICKS_PER_SECOND
+    return true, gameClock.ToTenths(remaining), length, remaining, castTick
 end
 
 --- A buff that comes once the player has gone a while without attacking
@@ -226,6 +339,7 @@ local function measureFor(entry, now, stacks)
     end
     if entry.startVar ~= nil then return "start", measureStart end
     if entry.quietTicks ~= nil then return "quiet", measureQuiet end
+    if entry.barCastVar ~= nil then return "barTimer", measureBarTimer end
     if stacks == nil and entry.activeVar ~= nil then return "toggle", measureToggle end
     return "stacks", measureStacks
 end
@@ -321,14 +435,28 @@ end
 --- is an extension (Galeshot during Rapid Fire) and adds to its max; by more
 --- it's a refresh, which starts the max over. Any other kind's key moving is
 --- a new start (a recast). A refresh or new start is seen starting, so its
---- grace starts over (a new area, for an area buff).
+--- grace starts over (a new area, for an area buff). A timer's end tick
+--- moving at all while it didn't count as active starts its max over too,
+--- as a scripture switched on with another god book has that book's end,
+--- which can be earlier than the last book's, whose max no longer applies;
+--- it gets a grace only when the end moved later, as earlier needn't mean
+--- it's on again.
 ---@param entry BuffEntry
 ---@param run BuffRun Changed in place.
 ---@param key any
 ---@param remaining number? Seconds left, for a timer.
 ---@param now integer Logic tick.
 local function followKey(entry, run, key, remaining, now)
-    local moved = run.kind == "timer" and key - run.key or math.huge
+    local isTimer = run.kind == "timer"
+    if isTimer and run.counted == false then
+        -- Later is a new use (Greater Fury again after it was spent), whose
+        -- icon the bar can show a few ticks after its vars.
+        if key > run.key then run.graceUntil = now + GRACE_TICKS end
+        run.key = key
+        run.max = math.max(remaining, entry.duration or 0)
+        return
+    end
+    local moved = isTimer and key - run.key or math.huge
     run.key = key
     -- Earlier, or later by less than the jitter: followed without touching the max.
     if moved < JITTER_TICKS then return end
@@ -337,7 +465,7 @@ local function followKey(entry, run, key, remaining, now)
         run.max = run.max + added
         return
     end
-    if run.kind == "timer" then run.max = math.max(remaining, entry.duration or 0) end
+    if isTimer then run.max = math.max(remaining, entry.duration or 0) end
     run.graceUntil = now + GRACE_TICKS
 end
 
@@ -373,7 +501,8 @@ local function readNow(entry, now)
         followKey(entry, run, key, unrounded, now)
     end
     max = max or run.max
-    if counts(entry, run, now) then return curr, max, unrounded, stacks end
+    run.counted = counts(entry, run, now)
+    if run.counted then return curr, max, unrounded, stacks end
     -- Off, though its run's kept. A buff read by its stacks has none while off.
     if kind == "stacks" then return 0, 0, nil, 0 end
     return 0, max, nil, stacks
@@ -386,7 +515,7 @@ end
 --- value until its timer runs. Everything reads as off until the game clock
 --- has ticked.
 ---@param entry BuffEntry
----@return number curr Seconds left; for a buff with only stacks, the stacks; for a toggled one, 1 or 0.
+---@return number curr Seconds left; for a buff with only stacks, the stacks; for a toggled one, the bar's count under it (see measureToggle), else 1 or 0.
 ---@return number max
 ---@return number? unrounded
 ---@return integer? stacks
@@ -406,9 +535,66 @@ function activeBuffs.Read(entry)
     return curr, max, unrounded, stacks
 end
 
+--- Loads the items remembered for buffs' worn-slot icons, once.
+local function loadWornIcons()
+    if wornIcons ~= nil then return end
+    wornIcons = {}
+    for structName, itemID in tostring(PersistentDB:GetString(WORN_ICONS_STORAGE_KEY) or ""):gmatch("([%w_]+)=(%d+)") do
+        wornIcons[structName] = tonumber(itemID)
+    end
+end
+
+--- Saves the items remembered for buffs' worn-slot icons.
+local function saveWornIcons()
+    local pairsList = {}
+    for structName, itemID in pairs(wornIcons) do pairsList[#pairsList + 1] = structName .. "=" .. itemID end
+    table.sort(pairsList)
+    PersistentDB:SetString(WORN_ICONS_STORAGE_KEY, table.concat(pairsList, ","))
+end
+
+--- Whether an item's config name matches one of a buff's worn-icon
+--- patterns (see BuffWornIcon.itemNames).
+---@param wornIcon BuffWornIcon
+---@param itemID integer
+---@return boolean
+local function isIconItem(wornIcon, itemID)
+    local name = itemConfigNames[itemID]
+    if name == nil then
+        name = gameApi.ItemConfigName(itemID) or false
+        itemConfigNames[itemID] = name
+    end
+    if not name then return false end
+    for _, pattern in ipairs(wornIcon.itemNames) do
+        if name:find(pattern) then return true end
+    end
+    return false
+end
+
+--- The item a buff shows as its icon from a worn slot (see
+--- BuffEntry.wornIcon): what's worn there, if its name says it's one of the
+--- buff's items or the buff is active (only then is any item there sure to
+--- be its own: the scripture can't be on without a god book). That item is
+--- remembered, between sessions too, and shown while the slot holds another.
+---@param entry BuffEntry
+---@return integer? itemID nil for a buff without a worn icon, or before any item has been taken.
+function activeBuffs.WornIcon(entry)
+    local wornIcon = entry.wornIcon
+    local slot = wornIcon and wornEquipment.SLOTS[wornIcon.slot]
+    if slot == nil then return nil end
+    loadWornIcons()
+    local worn = wornEquipment.Item(slot)
+    local fits = worn ~= nil and (isIconItem(wornIcon, worn) or activeBuffs.Read(entry) > 0)
+    if fits and worn ~= wornIcons[entry.structName] then
+        wornIcons[entry.structName] = worn
+        saveWornIcons()
+    end
+    return wornIcons[entry.structName]
+end
+
 --- Forgets the buffs being followed, e.g. on leaving the game.
 function activeBuffs.Reset()
-    runs, readings, maxStacks, groupMatches = {}, {}, {}, {}
+    runs, readings, maxStacks, maxCounts, groupMatches = {}, {}, {}, {}, {}
+    barTimings, barLengths = {}, {}
 end
 
 return activeBuffs

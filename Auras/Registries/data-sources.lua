@@ -37,7 +37,8 @@ local dataSources = {}
 ---@field hasStacks boolean? A buff that reports its stack count, for $stacks.
 ---@field hasAmmo boolean? Reports its ammo from `details`, for $ammo.
 ---@field hasTarget boolean? About the player's target: reports its details from `details`, for $target, $level, $hitChance and $weakness.
----@field details fun(): string?, integer?, integer?, string?, TargetInfo? | nil Name, sprite icon, item icon, $ammo and the target's details right now, instead of the fields (see Details).
+---@field details fun(): string?, integer?, integer?, string?, TextInfo? | nil Name, sprite icon, item icon, $ammo and the target's details right now, instead of the fields (see Details).
+---@field textInfo TextInfo? Text details that never change, for a source without `details` (a toggled buff's compact values).
 ---@field category string? A category id of its type's (see DataType.categories); nil for a type without them.
 ---@field readTimed fun(seconds: number): number, number, number | nil For an on/off source that can count down a length the player sets from when it comes on: the time left, the length and the unrounded time left (see WithDuration).
 ---@field movedFrom string[]? Ids it used to have, so auras saved with them follow it.
@@ -331,12 +332,12 @@ end
 ---@return integer? spriteID
 ---@return integer? objectID
 ---@return string? ammo The quiver's ammo, for $ammo; nil for every other source.
----@return TargetInfo? target The target's details, for a target source's target fields; nil for every other source.
+---@return TextInfo? info The target's details, for a target source's target fields, or the source's textInfo.
 function dataSources.Details(sourceID)
     local source = dataSources.Get(sourceID)
     if source == nil then return nil end
     if source.details ~= nil then return source.details() end
-    return source.name or source.label, source.icon, source.iconObject
+    return source.name or source.label, source.icon, source.iconObject, nil, source.textInfo
 end
 
 --- Whether the game's action bars show a source's ability as usable now (a

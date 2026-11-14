@@ -7,13 +7,15 @@ local textTemplate = {}
 ---@alias TextFieldID "value"|"max"|"percent"|"stacks"|"charges"|"name"|"ammo"|"keybind"|"target"|"level"|"hitChance"|"weakness"
 
 --- Text fields a source gives besides its values, name and ammo: its
---- target's details (see TargetInfo), or its ability's keybind.
+--- target's details (see TargetInfo), or its ability's keybind; or how its
+--- values are written.
 ---@class TextInfo
 ---@field name string? The target's name, for $target.
 ---@field level integer? Its combat level, for $level.
 ---@field hitChance number? The player's chance to hit it, in percent, for $hitChance.
 ---@field weakness string? Its weakness, for $weakness.
 ---@field keybind string? The ability's keybind on the action bars, for $keybind.
+---@field compactValues boolean? $value and $max of 1000 or more are written as the buff bar writes counts (1.5K).
 
 ---@class TextField
 ---@field id TextFieldID
@@ -69,6 +71,8 @@ local PERCENT_FORMATS = { "%.0f%%", "%.1f%%", "%.2f%%", "%.3f%%" }
 -- Taken off before rounding up, so a value a float's error above a whole
 -- number doesn't round up to the next one.
 local ROUNDING_SLACK = 1e-9
+-- A compact value's letters, largest first, with what each stands for.
+local COMPACT_UNITS = { { letter = "M", size = 1000000 }, { letter = "K", size = 1000 } }
 
 ---@type table<string, TextField>
 local FIELDS_BY_ID = {}
@@ -149,6 +153,36 @@ local function formatValue(value, decimalsBelow)
     return tostring(math.tointeger(value) or value)
 end
 
+--- A value written as the buff bar writes a count: 1000 or more as K and
+--- 1000000 or more as M, to one decimal without ".0" (1500 is "1.5K"). A
+--- value that rounds to 1000 of a letter takes the next one up (999,960 is
+--- "1M", not "1000K").
+---@param value any
+---@return string? text nil for a value under 1000, or not a number.
+local function compactValue(value)
+    if type(value) ~= "number" then return nil end
+    for index, unit in ipairs(COMPACT_UNITS) do
+        if value >= unit.size then
+            local rounded = string.format("%.1f", value / unit.size)
+            local larger = COMPACT_UNITS[index - 1]
+            if larger ~= nil and tonumber(rounded) >= larger.size / unit.size then return "1" .. larger.letter end
+            return (rounded:gsub("%.0$", "")) .. unit.letter
+        end
+    end
+    return nil
+end
+
+--- $value's or $max's text: compact for a source that writes its values so
+--- (see TextInfo.compactValues), else see formatValue.
+---@param value any
+---@param decimalsBelow number?
+---@param info TextInfo?
+---@return string
+local function valueText(value, decimalsBelow, info)
+    local compact = info ~= nil and info.compactValues and compactValue(value)
+    return compact or formatValue(value, decimalsBelow)
+end
+
 --- The value as a percentage of the max, rounded to `decimals` (0 to
 --- MAX_PERCENT_DECIMALS; anything else is brought within them). A max of 0
 --- reads 0%.
@@ -189,8 +223,8 @@ end
 ---@param percentDecimals integer?
 ---@return string
 local function fieldText(field, curr, max, decimalsBelow, stacks, name, ammo, info, percentDecimals)
-    if field == "value" then return formatValue(curr, decimalsBelow) end
-    if field == "max" then return formatValue(max, decimalsBelow) end
+    if field == "value" then return valueText(curr, decimalsBelow, info) end
+    if field == "max" then return valueText(max, decimalsBelow, info) end
     if field == "percent" then return percentText(curr, max, percentDecimals) end
     if field == "stacks" or field == "charges" then return stacks ~= nil and formatValue(stacks) or "" end
     if field == "name" then return name or "" end

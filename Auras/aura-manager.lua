@@ -56,7 +56,7 @@ local DISPLAYS = {
 ---@field icon integer?
 ---@field object integer?
 ---@field ammo string? The quiver's ammo, for $ammo.
----@field target TargetInfo? The target's details, for a target source's $target, $level, $hitChance and $weakness.
+---@field info TextInfo? Its text details (see dataSources.Details): a target source's $target, $level, $hitChance and $weakness.
 ---@field keybindStep integer? The step the keybind was read in (see sourceKeybind).
 ---@field keybind TextInfo? The ability's keybind for $keybind, as a TextInfo that's replaced only when it changes.
 
@@ -619,7 +619,7 @@ local function sourceValue(sourceID, withDetails)
         value.detailsStep = step
         -- Name and icon don't need a player: an unlocked bar still shows
         -- its icon at the login screen.
-        value.name, value.icon, value.object, value.ammo, value.target = dataSources.Details(sourceID)
+        value.name, value.icon, value.object, value.ammo, value.info = dataSources.Details(sourceID)
     end
     return value
 end
@@ -739,9 +739,9 @@ local function drawEntry(entry)
     if sourceID ~= nil then
         local value = sourceValue(sourceID, WITH_DETAILS)
         curr, max, unrounded, stacks = value.curr, value.max, value.unrounded, value.stacks
-        name, icon, object, ammo, info = value.name, value.icon, value.object, value.ammo, value.target
-        -- An ability has no target details, so its keybind takes their place.
-        if entry.showsKeybind then info = sourceKeybind(sourceID, value) end
+        name, icon, object, ammo, info = value.name, value.icon, value.object, value.ammo, value.info
+        -- An ability has no other text details, so its keybind takes their place.
+        if entry.showsKeybind and info == nil then info = sourceKeybind(sourceID, value) end
     end
     updateConditions(entry)
     -- A smooth source's unrounded value is only for drawing; text keeps the
