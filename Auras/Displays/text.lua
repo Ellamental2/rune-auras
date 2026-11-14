@@ -131,11 +131,11 @@ end
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For the target's fields.
-function Text:SetDetails(name, spriteID, objectID, ammo, target)
+---@param info TextInfo? For the target's fields and an ability's keybind.
+function Text:SetDetails(name, spriteID, objectID, ammo, info)
     if self.icon ~= nil then self.icon:Set(spriteID, objectID) end
-    if name ~= self.name or ammo ~= self.ammo or target ~= self.target then
-        self.name, self.ammo, self.target = name, ammo, target
+    if name ~= self.name or ammo ~= self.ammo or info ~= self.info then
+        self.name, self.ammo, self.info = name, ammo, info
         self:redraw()
     end
 end
@@ -160,7 +160,7 @@ function Text:redraw()
     local content = textTemplate.NO_DATA
     if curr ~= nil and max ~= nil then
         content = textTemplate.Format(self.template, curr, max, self.decimalsBelow, self.stacks, self.name, self.ammo,
-            self.target, self.percentDecimals)
+            self.info, self.percentDecimals)
     end
     if content ~= self.textContent then
         self.textContent = content

@@ -15,7 +15,6 @@
 ---@field swipeAnticlockwise boolean The radial's edge turns anticlockwise rather than clockwise.
 ---@field wipeDirection "right"|"left"|"down"|"up" The way the linear wipe grows: right from the left edge, left from the right, down from the top, up from the bottom.
 ---@field dimWhileActive boolean Grey the icon while the value is above 0 (a buff: while inactive).
----@field hideTextWhenReady boolean
 ---@field hideWhileInactive boolean Hide a buff's icon while it's inactive.
 ---@field hideWhileActive boolean Hide a buff's icon while it's active, e.g. to only show a missing buff.
 ---@field showActiveBelow number With hideWhileActive, show again once the time left drops to this many seconds (0: stays hidden).
@@ -41,7 +40,6 @@ iconOptions.defaults = {
     swipeAnticlockwise = false,
     wipeDirection = "up",
     dimWhileActive = true,
-    hideTextWhenReady = true,
     hideWhileInactive = false,
     hideWhileActive = false,
     showActiveBelow = 0,

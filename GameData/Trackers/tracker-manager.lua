@@ -2,6 +2,7 @@
 -- session's state, all together and in an order that works.
 
 local abilityCooldowns = require("GameData/Trackers/ability-cooldowns")
+local actionBar = require("GameData/Trackers/action-bar")
 local activeBuffs = require("GameData/Trackers/active-buffs")
 local buffBar = require("GameData/Trackers/buff-bar")
 local channel = require("GameData/Trackers/channel")
@@ -20,8 +21,8 @@ local trackerManager = {}
 
 -- In start order: the game clock first, as the others read its tick count,
 -- and target-debuffs after player-target (see targetDebuffs.Start). Every
--- one has Reset; active-buffs, buff-bar and channel follow no events of
--- their own, so they have no Start or Stop.
+-- one has Reset; active-buffs, buff-bar, action-bar and channel follow no
+-- events of their own, so they have no Start or Stop.
 local TRACKERS = {
     gameClock,
     varCache,
@@ -36,6 +37,7 @@ local TRACKERS = {
     targetInfo,
     activeBuffs,
     buffBar,
+    actionBar,
     channel,
 }
 

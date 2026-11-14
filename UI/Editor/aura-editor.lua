@@ -26,6 +26,7 @@ local loadTab = require("UI/Editor/load-tab")
 ---@field usesText (boolean|fun(aura: Aura): boolean)? false (or a function returning it for the aura) drops the Text section.
 ---@field usesShowText boolean? false drops Show text (the Text display is all text).
 ---@field showTextOption { field: string, label: string }? The Text section's checkbox in place of Show text (a Segmented bar's Show progress text).
+---@field hideWhenReadyLabel (fun(aura: Aura): string?)? Each text node's checkbox to blank it while the source is ready (TextNode.hideWhenReady), by its label for the aura's source; nil (or no function) for none.
 ---@field rebuildOn table<string, boolean>? Options that change which of its controls show; changing one rebuilds the editor.
 ---@field beginBuild fun()? Called at the start of every build, to drop controls kept from the last one (a collapsed section isn't rebuilt).
 

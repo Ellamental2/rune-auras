@@ -4,7 +4,16 @@
 
 local textTemplate = {}
 
----@alias TextFieldID "value"|"max"|"percent"|"stacks"|"charges"|"name"|"ammo"|"target"|"level"|"hitChance"|"weakness"
+---@alias TextFieldID "value"|"max"|"percent"|"stacks"|"charges"|"name"|"ammo"|"keybind"|"target"|"level"|"hitChance"|"weakness"
+
+--- Text fields a source gives besides its values, name and ammo: its
+--- target's details (see TargetInfo), or its ability's keybind.
+---@class TextInfo
+---@field name string? The target's name, for $target.
+---@field level integer? Its combat level, for $level.
+---@field hitChance number? The player's chance to hit it, in percent, for $hitChance.
+---@field weakness string? Its weakness, for $weakness.
+---@field keybind string? The ability's keybind on the action bars, for $keybind.
 
 ---@class TextField
 ---@field id TextFieldID
@@ -17,7 +26,8 @@ local textTemplate = {}
 --- stack count and $charges an ability's charges ready (the same value,
 --- named for each), both empty for sources without one. $name is the
 --- source's name (for "Any channel", what's being channelled). $ammo is
---- the quiver's ammo ("Ful" for Ful arrows or bolts). $target, $level,
+--- the quiver's ammo ("Ful" for Ful arrows or bolts). $keybind is an
+--- ability's keybind, from its first slot on the action bars. $target, $level,
 --- $hitChance and $weakness are about the player's target (its name, combat
 --- level, the player's chance to hit it and its weakness), for target
 --- sources. Each is empty for sources without one.
@@ -30,6 +40,7 @@ textTemplate.FIELDS = {
     { id = "charges", label = "Charges" },
     { id = "name", label = "Name" },
     { id = "ammo", label = "Ammo" },
+    { id = "keybind", label = "Keybind" },
     { id = "target", label = "Target" },
     { id = "level", label = "Target level" },
     { id = "hitChance", label = "Hit chance" },
@@ -153,16 +164,17 @@ local function percentText(curr, max, decimals)
     return string.format(PERCENT_FORMATS[decimals + 1], percent)
 end
 
---- One of the target's fields' text.
+--- One of a source's TextInfo fields' text.
 ---@param field TextFieldID
----@param target TargetInfo?
+---@param info TextInfo?
 ---@return string
-local function targetFieldText(field, target)
-    if target == nil then return "" end
-    if field == "target" then return target.name or "" end
-    if field == "level" then return target.level ~= nil and formatValue(target.level) or "" end
-    if field == "hitChance" then return target.hitChance ~= nil and formatValue(target.hitChance) .. "%" or "" end
-    return target.weakness or ""
+local function infoFieldText(field, info)
+    if info == nil then return "" end
+    if field == "keybind" then return info.keybind or "" end
+    if field == "target" then return info.name or "" end
+    if field == "level" then return info.level ~= nil and formatValue(info.level) or "" end
+    if field == "hitChance" then return info.hitChance ~= nil and formatValue(info.hitChance) .. "%" or "" end
+    return info.weakness or ""
 end
 
 --- One field's text.
@@ -173,17 +185,17 @@ end
 ---@param stacks number?
 ---@param name string?
 ---@param ammo string?
----@param target TargetInfo?
+---@param info TextInfo?
 ---@param percentDecimals integer?
 ---@return string
-local function fieldText(field, curr, max, decimalsBelow, stacks, name, ammo, target, percentDecimals)
+local function fieldText(field, curr, max, decimalsBelow, stacks, name, ammo, info, percentDecimals)
     if field == "value" then return formatValue(curr, decimalsBelow) end
     if field == "max" then return formatValue(max, decimalsBelow) end
     if field == "percent" then return percentText(curr, max, percentDecimals) end
     if field == "stacks" or field == "charges" then return stacks ~= nil and formatValue(stacks) or "" end
     if field == "name" then return name or "" end
     if field == "ammo" then return ammo or "" end
-    return targetFieldText(field, target)
+    return infoFieldText(field, info)
 end
 
 --- Fills a template with values.
@@ -196,15 +208,24 @@ end
 ---@param stacks number? Stacks or charges; nil leaves $stacks and $charges empty.
 ---@param name string? For $name.
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For $target, $level, $hitChance and $weakness.
+---@param info TextInfo? For $keybind, $target, $level, $hitChance and $weakness.
 ---@param percentDecimals integer? Decimals for $percent; nil for none.
 ---@return string
-function textTemplate.Format(template, curr, max, decimalsBelow, stacks, name, ammo, target, percentDecimals)
+function textTemplate.Format(template, curr, max, decimalsBelow, stacks, name, ammo, info, percentDecimals)
     local parts = textTemplate.Parts(template or textTemplate.DEFAULT)
-    local text = fieldText(parts.first, curr, max, decimalsBelow, stacks, name, ammo, target, percentDecimals)
+    local text = fieldText(parts.first, curr, max, decimalsBelow, stacks, name, ammo, info, percentDecimals)
     if parts.second == nil then return text end
     return text .. parts.separator
-        .. fieldText(parts.second, curr, max, decimalsBelow, stacks, name, ammo, target, percentDecimals)
+        .. fieldText(parts.second, curr, max, decimalsBelow, stacks, name, ammo, info, percentDecimals)
+end
+
+--- Whether a template shows a field.
+---@param template string?
+---@param field TextFieldID
+---@return boolean
+function textTemplate.Uses(template, field)
+    local parts = textTemplate.Parts(template or textTemplate.DEFAULT)
+    return parts.first == field or parts.second == field
 end
 
 return textTemplate

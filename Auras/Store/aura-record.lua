@@ -444,6 +444,7 @@ function auraRecord.FromSaved(saved)
     aura.textTemplate = aura.textTemplate or textTemplate.DEFAULT
     auraTexts.Ensure(aura)
     auraTexts.Fill(aura)
+    auraTexts.MoveHideWhenReady(aura)
     auraRecord.Tidy(aura)
     return aura
 end

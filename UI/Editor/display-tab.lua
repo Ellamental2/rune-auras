@@ -66,13 +66,20 @@ end
 ---@param showOption { field: string, label: string }? The checkbox that switches the text on; nil for none.
 ---@param context EditorTabContext
 ---@param sourceID string? The aura's source, which decides the text's fields.
-local function buildTextOptions(view, textHolder, update, showOption, context, sourceID)
+---@param hideWhenReadyLabel string? A text node's Hide when ready checkbox's label; nil for none.
+local function buildTextOptions(view, textHolder, update, showOption, context, sourceID, hideWhenReadyLabel)
+    local checkboxes = {}
     if showOption ~= nil then
-        local field = showOption.field
-        view:AddCheckboxButton({
-            { text = showOption.label, value = field, selected = textHolder[field] == true },
-        }, {
-            onChange = function(_, _, _, selected) update(field, selected == true) end,
+        checkboxes[#checkboxes + 1] = { text = showOption.label, value = showOption.field,
+            selected = textHolder[showOption.field] == true }
+    end
+    if hideWhenReadyLabel ~= nil then
+        checkboxes[#checkboxes + 1] = { text = hideWhenReadyLabel, value = "hideWhenReady",
+            selected = textHolder.hideWhenReady == true }
+    end
+    if #checkboxes > 0 then
+        view:AddCheckboxButton(checkboxes, {
+            onChange = function(_, _, field, selected) update(field, selected == true) end,
         })
     end
 
@@ -229,8 +236,10 @@ end
 --- drawn on top), then Add text.
 ---@param aura Aura
 ---@param context EditorTabContext
-local function buildTextNodes(aura, context)
+---@param typeEditor TypeEditor
+local function buildTextNodes(aura, context, typeEditor)
     local texts = aura.texts
+    local hideWhenReadyLabel = typeEditor.hideWhenReadyLabel and typeEditor.hideWhenReadyLabel(aura) or nil
     local function editTexts(change, rebuild)
         auraStore.Edit(aura.id, change)
         context.changed("texts")
@@ -243,7 +252,7 @@ local function buildTextNodes(aura, context)
         -- Keyed by aura and the node's key, so collapsing one follows it
         -- when it moves.
         context.section("text:" .. tostring(aura.id) .. ":" .. tostring(node.key), "Text " .. index, function(view)
-            buildTextOptions(view, node, nodeUpdate, SHOW_TEXT, context, aura.source)
+            buildTextOptions(view, node, nodeUpdate, SHOW_TEXT, context, aura.source, hideWhenReadyLabel)
             buildTextPosition(view, node, nodeUpdate)
         end, textNodeButtons(aura, index, editTexts))
     end
@@ -448,7 +457,7 @@ function displayTab.Build(aura, context)
     local displayType = displayTypes.Get(aura.display)
     local drawsTextNodes = displayType ~= nil and displayType.options.usesTextNodes
     if aura.texts ~= nil and drawsTextNodes then
-        buildTextNodes(aura, context)
+        buildTextNodes(aura, context, typeEditor)
     elseif usesText(typeEditor, aura) then
         context.section("text", "Text", function(view)
             local showOption = typeEditor.usesShowText ~= false and (typeEditor.showTextOption or SHOW_TEXT) or nil

@@ -48,6 +48,28 @@ local ACTIVE_CHOICES = {
     { id = true, label = "Active" },
     { id = false, label = "Not active" },
 }
+-- State's choices for a cooldown, where active means on cooldown.
+local COOLDOWN_STATE_CHOICES = {
+    { id = true, label = "On cooldown" },
+    { id = false, label = "Not on cooldown" },
+}
+-- State's choices for an ability, which can also be tested for being
+-- castable (see conditions.USABLE).
+local ABILITY_STATE_CHOICES = {
+    { id = true, label = "On cooldown" },
+    { id = false, label = "Not on cooldown" },
+    { id = conditions.USABLE, label = "Castable" },
+    { id = conditions.NOT_USABLE, label = "Not castable" },
+}
+
+--- State's choices for a data type (see readType).
+---@param dataTypeID string?
+---@return { id: any, label: string }[]
+local function stateChoices(dataTypeID)
+    if conditions.USABLE_TYPES[dataTypeID] then return ABILITY_STATE_CHOICES end
+    if conditions.COOLDOWN_TYPES[dataTypeID] then return COOLDOWN_STATE_CHOICES end
+    return ACTIVE_CHOICES
+end
 local BOOL_CHOICES = {
     { id = true, label = "Yes" },
     { id = false, label = "No" },
@@ -175,6 +197,26 @@ local function addSourcePicker(view, check, dataTypeID, edit)
     })
 end
 
+--- The data type a check reads: its own, or the aura's source's.
+---@param aura Aura
+---@param dataTypeID string? nil for the aura's own source.
+---@return string?
+local function readType(aura, dataTypeID)
+    if dataTypeID ~= nil then return dataTypeID end
+    local own = dataSources.Get(aura.source)
+    return own and own.type or nil
+end
+
+--- The State combo's choice for a check's value: false (not active or not
+--- on cooldown), a usable value, or else true, as saves from before values
+--- were kept can hold anything.
+---@param value any A check's value.
+---@return boolean|string
+local function stateChoice(value)
+    if value == false or conditions.IsUsableValue(value) then return value end
+    return true
+end
+
 --- What a check can test: that depends on the source's type (only buffs
 --- and debuffs have stacks). A kind saved before it was limited stays listed.
 ---@param aura Aura
@@ -182,12 +224,7 @@ end
 ---@param dataTypeID string? nil for the aura's own source.
 ---@return CheckKind[]
 local function kindChoices(aura, check, dataTypeID)
-    local readType = dataTypeID
-    if readType == nil then
-        local own = dataSources.Get(aura.source)
-        readType = own and own.type or nil
-    end
-    local kinds = conditions.ChecksFor(readType)
+    local kinds = conditions.ChecksFor(readType(aura, dataTypeID))
     local isListed = false
     for _, kind in ipairs(kinds) do isListed = isListed or kind.id == check.kind end
     if not isListed then
@@ -217,6 +254,9 @@ local function buildCheck(view, aura, holder, index, edit)
             edit(function()
                 check.sourceType = typeID ~= OWN_SOURCE and typeID or nil
                 check.source = nil
+                -- Only abilities can be tested for being usable.
+                local canTestUsable = conditions.USABLE_TYPES[readType(aura, check.sourceType)]
+                if conditions.IsUsableValue(check.value) and not canTestUsable then check.value = true end
             end, REBUILD)
         end, "Unknown data type")
     addRemoveButton(view, "Remove", function()
@@ -240,8 +280,8 @@ local function buildCheck(view, aura, holder, index, edit)
     if not conditions.Compares(check.kind) then
         choiceCombo.Add(view, {
             label = "Which is",
-            choices = ACTIVE_CHOICES,
-            value = check.value ~= false,
+            choices = stateChoices(readType(aura, dataTypeID)),
+            value = stateChoice(check.value),
             onChange = function(wantsActive) edit(function() check.value = wantsActive end) end,
         })
         return

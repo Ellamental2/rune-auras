@@ -144,8 +144,9 @@ end
 ---@param aura Aura
 ---@param ownSource string? The aura's source, for checks that read it.
 ---@param read ReadCheckValues
+---@param readUsable ReadUsable?
 ---@return boolean
-function loadOptions.Passes(aura, ownSource, read)
+function loadOptions.Passes(aura, ownSource, read, readUsable)
     local load = aura.load
     if load == nil then return true end
     for _, option in ipairs(loadOptions.OPTIONS) do
@@ -153,7 +154,7 @@ function loadOptions.Passes(aura, ownSource, read)
         if setting ~= nil and not optionPasses(option, setting) then return false end
     end
     for _, check in ipairs(load.checks or {}) do
-        if conditions.IsComplete(check) and not conditions.CheckPasses(check, ownSource, read) then
+        if conditions.IsComplete(check) and not conditions.CheckPasses(check, ownSource, read, readUsable) then
             return false
         end
     end

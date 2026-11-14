@@ -376,7 +376,6 @@ function Icon:Apply(aura)
     self.tint = aura.iconColour or NORMAL_TINT
     self.dimWhileActive = aura.dimWhileActive ~= false
     self.desaturate = aura.desaturate == true
-    self.hideTextWhenReady = aura.hideTextWhenReady ~= false
     self.hideWhileInactive = aura.hideWhileInactive == true
     self.hideWhileActive = aura.hideWhileActive == true
     self.showActiveBelow = tonumber(aura.showActiveBelow) or 0
@@ -396,8 +395,8 @@ end
 ---@param spriteID integer?
 ---@param objectID integer?
 ---@param ammo string? For $ammo.
----@param target TargetInfo? For the target's fields.
-function Icon:SetDetails(name, spriteID, objectID, ammo, target)
+---@param info TextInfo? For the target's fields and an ability's keybind.
+function Icon:SetDetails(name, spriteID, objectID, ammo, info)
     if spriteID ~= self.iconSpriteID or objectID ~= self.object then
         local sprite = self:showIcon(spriteID, objectID)
         -- If the square can't mask it, the radial keeps its old mask until
@@ -407,8 +406,8 @@ function Icon:SetDetails(name, spriteID, objectID, ammo, target)
         self.dimmed = nil
         self:redraw()
     end
-    if name ~= self.name or ammo ~= self.ammo or target ~= self.target then
-        self.name, self.ammo, self.target = name, ammo, target
+    if name ~= self.name or ammo ~= self.ammo or info ~= self.info then
+        self.name, self.ammo, self.info = name, ammo, info
         self:redraw()
     end
 end
@@ -544,10 +543,10 @@ function Icon:redraw()
     end
 
     -- Each text only reformats when its values change (see
-    -- TextNodes:SetValues); a ready cooldown or inactive buff can blank them.
-    local hasOnOff = self.isCooldown or self.isBuff
-    local showText = active or not self.hideTextWhenReady or not hasOnOff
-    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.target, showText, EMPTY_TEXT)
+    -- TextNodes:SetValues); a ready cooldown or inactive buff blanks those
+    -- set to hide then.
+    local ready = (self.isCooldown or self.isBuff) and not active
+    self.texts:SetValues(curr, max, self.stacks, self.name, self.ammo, self.info, true, EMPTY_TEXT, ready)
 end
 
 --- Places the linear wipe against the edge its direction covers from.

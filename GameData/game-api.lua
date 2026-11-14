@@ -374,11 +374,26 @@ local function spriteID(component) return component.spriteID end
 ---@return integer? spriteID -1 when it shows none; nil if it can't be read.
 function gameApi.SpriteID(component) return (Read("an interface sprite", spriteID, component)) end
 
+local function tint(component) return component.rgb end
+
+--- The colour a game interface component is tinted with, 0xRRGGBB (0xFFFFFF
+--- for none).
+---@param component userdata
+---@return integer? rgb nil if it can't be read.
+function gameApi.Tint(component) return (Read("an interface tint", tint, component)) end
+
+local function isShown(component) return component.visibleGlobal end
+
+--- Whether a game interface component is shown: it and every parent are visible.
+---@param component userdata
+---@return boolean? shown nil if it can't be read.
+function gameApi.IsShown(component) return (Read("an interface component's visibility", isShown, component)) end
+
 local function associatedObjectID(component) return component.associatedObjectID end
 
 --- The item a game interface's sprite component shows in place of a sprite.
 ---@param component userdata
----@return integer? itemID nil if it can't be read. TODO: check it's below 0 when no item is shown, as callers assume.
+---@return integer? itemID -1 when it shows no item; nil if it can't be read.
 function gameApi.AssociatedObjectID(component) return (Read("an interface item icon", associatedObjectID, component)) end
 
 local function eachDynamicChild(component, visit) component:IterateDynamicComponents(visit) end

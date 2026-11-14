@@ -42,6 +42,8 @@ local dataSources = {}
 ---@field readTimed fun(seconds: number): number, number, number | nil For an on/off source that can count down a length the player sets from when it comes on: the time left, the length and the unrounded time left (see WithDuration).
 ---@field movedFrom string[]? Ids it used to have, so auras saved with them follow it.
 ---@field ability AbilityEntry? Its ability, so a greater icon swap can be picked up (ApplyGreaterIcons).
+---@field keybind (fun(): string?)? For an ability, its keybind on the action bars (see Keybind).
+---@field usable (fun(): boolean?)? For an ability, whether the game's action bars show it as usable now; nil when it isn't on a bar (see Usable).
 
 --- A group of a data type's sources, picked before the source.
 ---@class DataCategory
@@ -337,6 +339,26 @@ function dataSources.Details(sourceID)
     return source.name or source.label, source.icon, source.iconObject
 end
 
+--- Whether the game's action bars show a source's ability as usable now (a
+--- shield it needs worn, enough adrenaline for its current cost).
+---@param sourceID string
+---@return boolean? usable nil for a source that isn't an ability's, or one that isn't on an action bar.
+function dataSources.Usable(sourceID)
+    local source = dataSources.Get(sourceID)
+    if source == nil or source.usable == nil then return nil end
+    return source.usable()
+end
+
+--- A source's ability's keybind: its first slot's on the action bars, the
+--- main bar first, then the additional bars in order.
+---@param sourceID string
+---@return string? keybind nil for a source that isn't an ability's, one not on a bar, or a slot without one.
+function dataSources.Keybind(sourceID)
+    local source = dataSources.Get(sourceID)
+    if source == nil or source.keybind == nil then return nil end
+    return source.keybind()
+end
+
 -- Text fields every source fills.
 local COMMON_TEXT_FIELDS = { value = true, max = true, percent = true, name = true }
 -- Text fields about the player's target, which target sources fill.
@@ -356,6 +378,7 @@ function dataSources.FillsTextField(sourceID, field)
     if field == "charges" then return source.type == "cooldown" end
     if field == "stacks" then return source.hasStacks == true end
     if field == "ammo" then return source.hasAmmo == true end
+    if field == "keybind" then return source.keybind ~= nil end
     return TARGET_TEXT_FIELDS[field] == true and source.hasTarget == true
 end
 

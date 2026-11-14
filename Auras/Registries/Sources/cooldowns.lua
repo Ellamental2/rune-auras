@@ -6,6 +6,7 @@
 
 local abilityCatalogue = require("GameData/Catalogues/ability-catalogue")
 local abilityCooldowns = require("GameData/Trackers/ability-cooldowns")
+local actionBar = require("GameData/Trackers/action-bar")
 
 local cooldowns = {}
 
@@ -52,15 +53,28 @@ local function currentStage(ability)
     return nil
 end
 
---- A cooldown source's read: the ability's cooldown, or ready while it's on
---- a recast stage. A stage's own cooldown is only the global cooldown after
---- the stage before, so it isn't shown.
+--- A conjure's command while the conjure is out, as the action bar shows
+--- it in the conjure's place.
+---@param ability AbilityEntry
+---@return AbilityCommand? command nil while it's the conjure itself.
+local function activeCommand(ability)
+    local command = ability.command
+    if command == nil or (abilityCooldowns.VarValue(command.activeVar) or 0) == 0 then return nil end
+    return command
+end
+
+--- A cooldown source's read: the ability's cooldown, its command's while a
+--- conjure is out, or ready while it's on a recast stage. A stage's own
+--- cooldown is only the global cooldown after the stage before, so it isn't
+--- shown.
 ---@param ability AbilityEntry
 ---@return fun(): number?, number?, number?, integer?
 local function cooldownReader(ability)
     local varBase = ability.var
-    if ability.stages == nil then return function() return cooldowns.Read(varBase) end end
+    if ability.stages == nil and ability.command == nil then return function() return cooldowns.Read(varBase) end end
     return function()
+        local command = activeCommand(ability)
+        if command ~= nil then return cooldowns.Read(command.var) end
         if currentStage(ability) == nil then return cooldowns.Read(varBase) end
         local _, total = abilityCooldowns.GetCooldown(varBase)
         -- One use ready: GetCharges would say 0, as the ability's cooldown runs.
@@ -68,15 +82,32 @@ local function cooldownReader(ability)
     end
 end
 
---- A staged ability's details: its current stage's name and icon.
+--- The details of an ability the action bar swaps for another: its command's
+--- or its current stage's name and icon.
 ---@param ability AbilityEntry
 ---@return fun(): string?, integer?, integer?
-local function stageDetails(ability)
+local function swappedDetails(ability)
     return function()
-        local stage = currentStage(ability)
-        if stage == nil then return ability.label, ability.icon, nil end
-        return stage.label or ability.label, stage.icon or ability.icon, nil
+        local swapped = activeCommand(ability) or currentStage(ability)
+        if swapped == nil then return ability.label, ability.icon, nil end
+        return swapped.label or ability.label, swapped.icon or ability.icon, nil
     end
+end
+
+--- Every icon the action bar can show for an ability: its own, its greater
+--- version's, its recast stages' and, for a conjure, its command's.
+---@param ability AbilityEntry
+---@return integer[]
+local function barIcons(ability)
+    local icons = {}
+    local function add(icon)
+        if icon ~= nil then icons[#icons + 1] = icon end
+    end
+    add(ability.baseIcon or ability.icon)
+    add(ability.greater and ability.greater.icon)
+    for _, stage in ipairs(ability.stages or {}) do add(stage.icon) end
+    add(ability.command and ability.command.icon)
+    return icons
 end
 
 --- Builds a cooldown source per ability, from the catalogue or FALLBACK.
@@ -92,8 +123,13 @@ function cooldowns.Build()
         -- Every ability's last use helps show the others are ready before
         -- the cooldown clock is synced.
         abilityCooldowns.Watch(varBase)
+        local icons = barIcons(ability)
         for _, stage in ipairs(ability.stages or {}) do
             abilityCooldowns.WatchFlag(stage.activeVar)
+        end
+        if ability.command ~= nil then
+            abilityCooldowns.Watch(ability.command.var)
+            abilityCooldowns.WatchFlag(ability.command.activeVar)
         end
         sources[#sources + 1] = {
             -- Abilities sharing a cooldown share a var, so the catalogue names
@@ -108,7 +144,10 @@ function cooldowns.Build()
             timed = true,
             state = "cooldown",
             read = cooldownReader(ability),
-            details = ability.stages and stageDetails(ability) or nil,
+            details = (ability.stages or ability.command) and swappedDetails(ability) or nil,
+            movedFrom = ability.movedFrom,
+            usable = function() return actionBar.IsUsable(icons) end,
+            keybind = function() return actionBar.Keybind(icons) end,
         }
     end
     return sources, usingCatalogue

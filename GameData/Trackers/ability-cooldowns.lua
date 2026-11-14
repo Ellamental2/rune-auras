@@ -72,10 +72,17 @@ local results = {}
 
 local readVarPlayer = gameApi.VarPlayer
 
--- A few abilities (Surge, Escape, Barge) can hold a second charge, timed by
--- a second var pair, <base>_CHARGE2_START/_END.
-local CHARGE2_SUFFIX = "_CHARGE2"
 local COOLDOWN_VAR_PREFIX = abilityCatalogue.COOLDOWN_VAR_PREFIX
+-- Abilities that can hold a second charge, to the var base timing it:
+-- <base>_CHARGE2_START/_END, or for the older two-charge abilities
+-- <base>2_START/_END (Backhand, Binding Shot, Impact), which work the same.
+local SECOND_CHARGES = {}
+for _, name in ipairs({ "MAGIC_SURGE", "RANGED_ESCAPE", "ATTACK_BARGE" }) do
+    SECOND_CHARGES[COOLDOWN_VAR_PREFIX .. name] = COOLDOWN_VAR_PREFIX .. name .. "_CHARGE2"
+end
+for _, name in ipairs({ "ATTACK_BACKHAND", "RANGED_BINDING_SHOT", "MAGIC_IMPACT" }) do
+    SECOND_CHARGES[COOLDOWN_VAR_PREFIX .. name] = COOLDOWN_VAR_PREFIX .. name .. "2"
+end
 -- Necromancy guards' special attack cooldowns share abilities' prefix, but
 -- not all have a _START_CLIENT (Soul Crush's hasn't).
 local WEAPON_COOLDOWN_PREFIX = COOLDOWN_VAR_PREFIX .. "WEAPON_"
@@ -83,6 +90,13 @@ local WEAPON_COOLDOWN_PREFIX = COOLDOWN_VAR_PREFIX .. "WEAPON_"
 local START_SUFFIX, END_SUFFIX = "_START", "_END"
 -- A _START's VarClient counterpart holds the client Logic tick of the same cast.
 local CLIENT_SUFFIX = "_CLIENT"
+-- Each second charge's _START and _END to the ability's var base, so a var
+-- change can be told apart with one lookup.
+local SECOND_CHARGE_VARS = {}
+for varBase, secondBase in pairs(SECOND_CHARGES) do
+    SECOND_CHARGE_VARS[secondBase .. START_SUFFIX] = varBase
+    SECOND_CHARGE_VARS[secondBase .. END_SUFFIX] = varBase
+end
 local TWO_CHARGES_STORAGE_KEY = "abilityTwoCharges"
 ---@type table<string, boolean>? Var base names of abilities seen with a second charge; loaded from storage on first use.
 local twoCharges = nil
@@ -98,11 +112,9 @@ end
 
 --- Notes, and saves, that an ability has a second charge. Nothing says
 --- whether the player has one (both read 0 until used), so an ability
---- counts as having it once its CHARGE2 vars are seen in use.
----@param name string One of its CHARGE2 var names.
-local function noteSecondCharge(name)
-    local varBase = string.match(name, "^(.-)" .. CHARGE2_SUFFIX .. "_")
-    if varBase == nil then return end
+--- counts as having it once its second charge's vars are seen in use.
+---@param varBase string The ability's var base.
+local function noteSecondCharge(varBase)
     loadTwoCharges()
     if twoCharges[varBase] then return end
     twoCharges[varBase] = true
@@ -133,7 +145,7 @@ local function noteStart(value, name)
     if highestStart == nil or value > highestStart then highestStart = value end
     local isAbility = string.find(name, COOLDOWN_VAR_PREFIX, 1, true) == 1
         and string.find(name, WEAPON_COOLDOWN_PREFIX, 1, true) ~= 1
-    local hasClientVar = isAbility and string.find(name, CHARGE2_SUFFIX, 1, true) == nil
+    local hasClientVar = isAbility and SECOND_CHARGE_VARS[name] == nil
     if hasClientVar and (syncStart == nil or value > syncStart) then
         syncStart, syncStartName = value, name
     end
@@ -310,20 +322,20 @@ function abilityCooldowns.GetCooldown(varBase)
     return result.remaining, result.total, result.unrounded
 end
 
---- How many charges an ability has ready. With Surge, using a
---- charge while both are ready sets only CHARGE2 (the ability stays
---- usable); using the last sets the base vars, whose cooldown runs until a
---- charge is back, and CHARGE2_END is when both are.
+--- How many charges an ability has ready. Using a charge while both are
+--- ready sets only the second charge's vars (the ability stays usable);
+--- using the last sets the base vars, whose cooldown runs until a charge is
+--- back, and the second charge's _END is when both are.
 ---@param varBase string
----@return integer? ready 0 while the base cooldown runs, 1 while only CHARGE2 does, else the most; nil when it can't be timed yet.
+---@return integer? ready 0 while the base cooldown runs, 1 while only the second charge's does, else the most; nil when it can't be timed yet.
 ---@return integer? most 1, or 2 once a second charge has been seen.
 function abilityCooldowns.GetCharges(varBase)
     local remaining = abilityCooldowns.GetCooldown(varBase)
     if remaining == nil then return nil end
     loadTwoCharges()
-    if not twoCharges[varBase] then return remaining > 0 and 0 or ONE_CHARGE, ONE_CHARGE end
+    if not twoCharges[varBase] or SECOND_CHARGES[varBase] == nil then return remaining > 0 and 0 or ONE_CHARGE, ONE_CHARGE end
     if remaining > 0 then return 0, TWO_CHARGES end
-    local secondRemaining = abilityCooldowns.GetCooldown(varBase .. CHARGE2_SUFFIX)
+    local secondRemaining = abilityCooldowns.GetCooldown(SECOND_CHARGES[varBase])
     local secondRecharging = secondRemaining ~= nil and secondRemaining > 0
     return secondRecharging and ONE_CHARGE or TWO_CHARGES, TWO_CHARGES
 end
@@ -339,8 +351,8 @@ function abilityCooldowns.GetNextCharge(varBase)
     local remaining, total, unrounded = abilityCooldowns.GetCooldown(varBase)
     if remaining == nil or remaining > 0 then return remaining, total, unrounded end
     loadTwoCharges()
-    if not twoCharges[varBase] then return remaining, total, unrounded end
-    local secondRemaining, secondTotal, secondUnrounded = abilityCooldowns.GetCooldown(varBase .. CHARGE2_SUFFIX)
+    if not twoCharges[varBase] or SECOND_CHARGES[varBase] == nil then return remaining, total, unrounded end
+    local secondRemaining, secondTotal, secondUnrounded = abilityCooldowns.GetCooldown(SECOND_CHARGES[varBase])
     if secondRemaining == nil or secondRemaining <= 0 then return remaining, total, unrounded end
     return secondRemaining, secondTotal, secondUnrounded
 end
@@ -387,9 +399,9 @@ local function onVarChanged(name, value, oldValue)
     local newValue = tonumber(value)
     cachedValues[name] = newValue or false
     varVersion = varVersion + 1
-    local isSecondCharge = string.find(name, CHARGE2_SUFFIX, 1, true) ~= nil
-    if newValue ~= nil and newValue > 0 and isSecondCharge then
-        noteSecondCharge(name)
+    local secondChargeOf = SECOND_CHARGE_VARS[name]
+    if newValue ~= nil and newValue > 0 and secondChargeOf ~= nil then
+        noteSecondCharge(secondChargeOf)
     end
     if kind ~= "start" or newValue == nil or newValue <= 0 then return end
     noteStart(newValue, name)

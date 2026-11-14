@@ -19,6 +19,19 @@ iconEditor.usesFillColour = false
 -- the linear wipe.
 iconEditor.rebuildOn = { swipeStyle = true }
 
+--- The label of a text node's checkbox to blank it while the source is
+--- ready, or nil for a source that's never ready (neither a cooldown nor a
+--- buff).
+---@param aura Aura
+---@return string?
+function iconEditor.hideWhenReadyLabel(aura)
+    local source = aura.source and dataSources.Get(aura.source)
+    local state = source ~= nil and source.state or nil
+    if state == "cooldown" then return "Hide when ready" end
+    if state == "active" then return "Hide while inactive" end
+    return nil
+end
+
 --- The Size section: one size, as icons are kept square.
 ---@param view EditorView
 ---@param aura IconOptions
@@ -130,21 +143,11 @@ function iconEditor.appearance(view, aura, update)
             selected = aura.hideWhileActive == true,
             tooltip = "To show a missing buff; see Show below",
         }
-        options[#options + 1] = {
-            text = "Hide text while inactive",
-            value = "hideTextWhenReady",
-            selected = aura.hideTextWhenReady ~= false,
-        }
     elseif state == "cooldown" then
         options[#options + 1] = {
             text = "Desaturate while on cooldown",
             value = "dimWhileActive",
             selected = aura.dimWhileActive ~= false,
-        }
-        options[#options + 1] = {
-            text = "Hide text when ready",
-            value = "hideTextWhenReady",
-            selected = aura.hideTextWhenReady ~= false,
         }
     end
     view:AddCheckboxButton(options, {

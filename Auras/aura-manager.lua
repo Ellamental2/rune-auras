@@ -9,6 +9,7 @@ local dataSources = require("Auras/Registries/data-sources")
 local displayTypes = require("Auras/Registries/display-types")
 local gameApi = require("GameData/game-api")
 local gameClock = require("GameData/Trackers/game-clock")
+local textTemplate = require("Auras/Helpers/text-template")
 
 local auraManager = {}
 
@@ -35,6 +36,7 @@ local DISPLAYS = {
 ---@field conditionMask integer Which of its conditions passed when it was last applied (see conditions.Mask).
 ---@field conditionsEveryLogicTick boolean Whether its conditions read a value extrapolated between server ticks.
 ---@field conditionsTick integer? The server or Logic tick its conditions were last tested on; nil to test next frame.
+---@field showsKeybind boolean? Whether its text shows $keybind, as its conditions last changed it (see sourceKeybind).
 
 --- A mounted dynamic group and its contents, in list order.
 ---@class DynamicGroupEntry
@@ -55,6 +57,8 @@ local DISPLAYS = {
 ---@field object integer?
 ---@field ammo string? The quiver's ammo, for $ammo.
 ---@field target TargetInfo? The target's details, for a target source's $target, $level, $hitChance and $weakness.
+---@field keybindStep integer? The step the keybind was read in (see sourceKeybind).
+---@field keybind TextInfo? The ability's keybind for $keybind, as a TextInfo that's replaced only when it changes.
 
 ---@type table<integer, MountedEntry>
 local mounted = {}
@@ -176,11 +180,24 @@ local function applyDisplay(display, aura)
     display:Apply(aura)
 end
 
+--- Whether an aura's text shows a field: its own text, or a text node's.
+---@param aura Aura As its conditions change it.
+---@param field TextFieldID
+---@return boolean
+local function showsField(aura, field)
+    if textTemplate.Uses(aura.textTemplate, field) then return true end
+    for _, node in ipairs(aura.texts or {}) do
+        if textTemplate.Uses(node.textTemplate, field) then return true end
+    end
+    return false
+end
+
 --- Applies an aura to its display as its passing conditions change it,
 --- including whether they hide it.
 ---@param entry MountedEntry
 local function applyEntry(entry)
     local aura, hidden = conditions.Apply(entry.aura, entry.conditionMask)
+    entry.showsKeybind = showsField(aura, "keybind")
     -- Applying can make parts (texts, ticks), so it can hit the limit.
     local ok, problem = pcall(applyDisplay, entry.display, aura)
     if not ok then reportDrawFailure(problem) end
@@ -306,8 +323,10 @@ local function mount(aura, parent, point)
     end
     local auraID = aura.id
     display:SetOnMoved(function(x, y) onDisplayMoved(auraID, x, y) end)
+    -- No condition passes yet, so the aura as it's stored decides whether
+    -- its text shows $keybind (applyEntry updates it as conditions change).
     mounted[auraID] = { display = display, displayID = aura.display, aura = aura, parent = parent,
-        version = auraStore.Version(auraID), conditionMask = 0 }
+        version = auraStore.Version(auraID), conditionMask = 0, showsKeybind = showsField(aura, "keybind") }
     scheduleConditions(mounted[auraID])
 end
 
@@ -605,6 +624,22 @@ local function sourceValue(sourceID, withDetails)
     return value
 end
 
+--- A source's keybind for $keybind, read once a step and only for auras
+--- whose text shows it, as reading it reads the action bars. Kept as a
+--- TextInfo replaced only when the keybind changes, so a display notices
+--- the change without a table made every step.
+---@param sourceID string
+---@param value SourceValue Its values this step.
+---@return TextInfo
+local function sourceKeybind(sourceID, value)
+    if value.keybindStep ~= step then
+        value.keybindStep = step
+        local keybind = dataSources.Keybind(sourceID)
+        if value.keybind == nil or value.keybind.keybind ~= keybind then value.keybind = { keybind = keybind } end
+    end
+    return value.keybind
+end
+
 --- What a condition's check reads (see ReadCheckValues).
 ---@param sourceID string
 ---@return number? curr
@@ -614,6 +649,10 @@ local function readForConditions(sourceID)
     local value = sourceValue(sourceID, VALUES_ONLY)
     return value.curr, value.max, value.stacks
 end
+
+--- Whether a check's ability is usable now (see ReadUsable).
+---@type ReadUsable
+local readUsable = dataSources.Usable
 
 --- Whether an aura loads this step. Each is tested once a server tick (its
 --- options are game vars too), or every Logic tick if a load check reads an
@@ -633,7 +672,7 @@ local function testLoaded(aura)
     local now = timing.everyLogicTick and logicTick or serverTick
     if now ~= nil and timing.tick == now then return loadedStates[aura.id] ~= false end
     timing.tick = now
-    return loadOptions.Passes(aura, readSourceID(aura), readForConditions)
+    return loadOptions.Passes(aura, readSourceID(aura), readForConditions, readUsable)
 end
 
 --- Works out loadCandidates from the store, and lets an aura that's no
@@ -683,7 +722,7 @@ local function updateConditions(entry)
     local now = entry.conditionsEveryLogicTick and logicTick or serverTick
     if now ~= nil and entry.conditionsTick == now then return end
     entry.conditionsTick = now
-    local mask = conditions.Mask(auraConditions, readSourceID(entry.aura), readForConditions)
+    local mask = conditions.Mask(auraConditions, readSourceID(entry.aura), readForConditions, readUsable)
     if mask ~= entry.conditionMask then
         entry.conditionMask = mask
         applyEntry(entry)
@@ -696,18 +735,20 @@ end
 local function drawEntry(entry)
     local sourceID = readSourceID(entry.aura)
     local curr, max, unrounded, stacks = nil, nil, nil, nil
-    local name, icon, object, ammo, target = nil, nil, nil, nil, nil
+    local name, icon, object, ammo, info = nil, nil, nil, nil, nil
     if sourceID ~= nil then
         local value = sourceValue(sourceID, WITH_DETAILS)
         curr, max, unrounded, stacks = value.curr, value.max, value.unrounded, value.stacks
-        name, icon, object, ammo, target = value.name, value.icon, value.object, value.ammo, value.target
+        name, icon, object, ammo, info = value.name, value.icon, value.object, value.ammo, value.target
+        -- An ability has no target details, so its keybind takes their place.
+        if entry.showsKeybind then info = sourceKeybind(sourceID, value) end
     end
     updateConditions(entry)
     -- A smooth source's unrounded value is only for drawing; text keeps the
     -- rounded one. Each display decides whether to use it.
     local display = entry.display
     if display.SetDetails ~= nil then
-        local ok, problem = pcall(display.SetDetails, display, name, icon, object, ammo, target)
+        local ok, problem = pcall(display.SetDetails, display, name, icon, object, ammo, info)
         if not ok then reportDrawFailure(problem) end
     end
     local ok, problem = pcall(display.SetValue, display, curr, max, unrounded, stacks)
