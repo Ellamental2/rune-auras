@@ -8,6 +8,7 @@
 local abilityCatalogue = require("GameData/Catalogues/ability-catalogue")
 local gameApi = require("GameData/game-api")
 local player = require("Auras/Registries/Sources/player")
+local familiar = require("Auras/Registries/Sources/familiar")
 local target = require("Auras/Registries/Sources/target")
 local cooldowns = require("Auras/Registries/Sources/cooldowns")
 local specialAttacks = require("Auras/Registries/Sources/special-attacks")
@@ -59,6 +60,7 @@ local dataSources = {}
 ---@type DataType[]
 local TYPES = {
     { id = "player", label = "Player" },
+    { id = "familiar", label = "Familiar" },
     { id = "target", label = "Target" },
     { id = "cooldown", label = "Ability cooldown" },
     { id = "specialAttack", label = "Special attack cooldown" },
@@ -81,10 +83,11 @@ local SOURCES = {}
 ---@type table<string, string> Every old id to its current one: cooldowns.RENAMED_IDS plus the sources' movedFrom (a buff's duplicates, a channel's old buff id). Rebuilt with the sources.
 local MOVED_IDS = {}
 
--- Each type's sources. All but the player's, the target's, the target
--- debuffs and the stalled ability are rebuilt from game config as it
--- becomes readable.
+-- Each type's sources. All but the player's, the familiar's, the target's,
+-- the target debuffs and the stalled ability are rebuilt from game config
+-- as it becomes readable.
 local playerList = player.Build()
+local familiarList = familiar.Build()
 local targetList = target.Build()
 local cooldownList = {}
 local specialAttackList = {}
@@ -102,7 +105,7 @@ local usingCatalogue = false
 --- Rebuilds SOURCES, the id lookup and MOVED_IDS from the lists.
 local function rebuildSources()
     for index = #SOURCES, 1, -1 do SOURCES[index] = nil end
-    local lists = { playerList, targetList, cooldownList, specialAttackList, buffList, debuffList,
+    local lists = { playerList, familiarList, targetList, cooldownList, specialAttackList, buffList, debuffList,
         targetDebuffList, channelList, stalledAbilityList, extraActionList }
     for _, list in ipairs(lists) do
         for _, source in ipairs(list) do SOURCES[#SOURCES + 1] = source end
