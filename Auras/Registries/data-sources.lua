@@ -40,7 +40,7 @@ local dataSources = {}
 ---@field details fun(): string?, integer?, integer?, string?, TextInfo? | nil Name, sprite icon, item icon, $ammo and the target's details right now, instead of the fields (see Details).
 ---@field textInfo TextInfo? Text details that never change, for a source without `details` (a toggled buff's compact values).
 ---@field category string? A category id of its type's (see DataType.categories); nil for a type without them.
----@field readTimed fun(seconds: number): number, number, number | nil For an on/off source that can count down a length the player sets from when it comes on: the time left, the length and the unrounded time left (see WithDuration).
+---@field readTimed (fun(seconds: number): number, number, number)? For an on/off source that can count down a length the player sets from when it comes on: the time left, the length and the unrounded time left (see WithDuration).
 ---@field movedFrom string[]? Ids it used to have, so auras saved with them follow it.
 ---@field ability AbilityEntry? Its ability, so a greater icon swap can be picked up (ApplyGreaterIcons).
 ---@field keybind (fun(): string?)? For an ability, its keybind on the action bars (see Keybind).
@@ -288,8 +288,8 @@ function dataSources.WithDuration(sourceID, seconds)
     local cachedID = byLength and byLength[seconds]
     if cachedID ~= nil then return cachedID end
     local source = SOURCES_BY_ID[sourceID]
-    if source == nil or source.readTimed == nil then return sourceID end
-    local readTimed = source.readTimed
+    local readTimed = source and source.readTimed
+    if source == nil or readTimed == nil then return sourceID end
     local id = source.id .. DURATION_SEPARATOR .. tostring(seconds)
     local variant = {}
     for key, value in pairs(source) do variant[key] = value end
